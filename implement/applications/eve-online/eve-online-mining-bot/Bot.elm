@@ -21,6 +21,8 @@
    + `activate-module-always` : Text found in tooltips of ship modules that should always be active. For example: "shield hardener".
    + `hide-when-neutral-in-local` : Should we hide when a neutral or hostile pilot appears in the local chat? The only supported values are `no` and `yes`.
    + `unload-fleet-hangar-percent` : This will make the bot to unload the mining hold at least XX percent full to the fleet hangar, you must be in a fleet with an orca or a rorqual and the fleet hangar must be visible within the inventory window.
+   + `reset-module-mining-every` : This will make the bot to stop the module mining. available (0-1000) Exemple: 500, This will make the bot to stop the module mining every half of the cycle.
+
 
    When using more than one setting, start a new line for each setting in the text input field.
    Here is an example of a complete settings string:
@@ -109,6 +111,7 @@ defaultBotSettings =
     , targetingRange = 8000
     , miningModuleRange = 5000
     , botStepDelayMilliseconds = 1300
+    , resetModuleMiningEvery = -1
     , selectInstancePilotName = Nothing
     , includeAsteroidPatterns = []
     }
@@ -151,6 +154,9 @@ parseBotSettings =
          , ( "bot-step-delay"
            , AppSettings.valueTypeInteger (\delay settings -> { settings | botStepDelayMilliseconds = delay })
            )
+         , ( "reset-module-mining-every"
+           , AppSettings.valueTypeInteger (\reset settings -> { settings | resetModuleMiningEvery = reset })
+           )
          , ( "include-asteroid-pattern"
            , AppSettings.valueTypeString
                 (\pattern settings ->
@@ -179,6 +185,7 @@ type alias BotSettings =
     , targetingRange : Int
     , miningModuleRange : Int
     , botStepDelayMilliseconds : Int
+    , resetModuleMiningEvery : Int
     , selectInstancePilotName : Maybe String
     , includeAsteroidPatterns : List String
     }
@@ -535,16 +542,38 @@ inSpaceWithMiningHoldSelected context seeUndockingComplete inventoryWindowWithMi
                                                     (describeBranch "I see a locked target."
                                                         (case knownMiningModules |> List.filter (.isActive >> Maybe.withDefault False >> not) |> List.head of
                                                             Nothing ->
-                                                                describeBranch
-                                                                    (if knownMiningModules == [] then
-                                                                        "Found no mining modules so far."
+                                                                if knownMiningModules == [] then
+                                                                    describeBranch "Found no mining modules so far."
+                                                                            (readShipUIModuleButtonTooltips context
+                                                                                |> Maybe.withDefault waitForProgressInGame
+                                                                            )
+                                                                else
+                                                                    case
+                                                                        knownMiningModules
+                                                                            |> List.filter (.isActive >>  Maybe.withDefault False)
+                                                                            |> List.head
+                                                                    of
+                                                                        Just activeModule ->
+                                                                            let
+                                                                                rotationMilli =
+                                                                                    activeModule.rampRotationMilli
+                                                                                        |> Maybe.withDefault 0
 
-                                                                    else
-                                                                        "All known mining modules found so far are active."
-                                                                    )
-                                                                    (readShipUIModuleButtonTooltips context
-                                                                        |> Maybe.withDefault waitForProgressInGame
-                                                                    )
+                                                                            in
+                                                                            if context.eventContext.botSettings.resetModuleMiningEvery > 0 && rotationMilli > context.eventContext.botSettings.resetModuleMiningEvery then
+                                                                                describeBranch ("Olha o tempo que o laser ja esta ativo.")
+                                                                                    (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
+                                                                            else
+                                                                                describeBranch ("All known mining modules found so far are active.")
+                                                                                        (readShipUIModuleButtonTooltips context
+                                                                                            |> Maybe.withDefault waitForProgressInGame
+                                                                                        )
+
+                                                                        Nothing ->
+                                                                            describeBranch "xxxAll known mining modules found so far are active.xxx"
+                                                                                    (readShipUIModuleButtonTooltips context
+                                                                                        |> Maybe.withDefault waitForProgressInGame
+                                                                                    )
 
                                                             Just inactiveModule ->
                                                                 describeBranch "I see an inactive mining module. Activate it."
