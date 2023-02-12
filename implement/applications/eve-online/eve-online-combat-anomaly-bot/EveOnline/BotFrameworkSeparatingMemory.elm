@@ -28,10 +28,10 @@ import EveOnline.BotFramework
         , UIElement
         , UseContextMenuCascadeNode
         , asReadingFromGameClientMemory
-        , cornersFromDisplayRegion
-        , doesPointIntersectRegion
+        , closestPointOnRectangleEdge
         , getModuleButtonTooltipFromModuleButton
         , growRegionOnAllSides
+        , isPointInRectangle
         , mouseClickOnUIElement
         , unpackContextMenuTreeToListOfActionsDependingOnReadings
         )
@@ -336,23 +336,45 @@ useContextMenuCascade ( initialUIElementName, initialUIElement ) useContextMenu 
 
                 cascadeFirstElement :: cascadeFollowingElements ->
                     let
+                        previousStepClickOnTargetLocation =
+                            context.previousStepEffects
+                                |> EveOnline.BotFramework.findMouseButtonClickLocationsInListOfEffects Common.EffectOnWindow.MouseButtonRight
+                                |> List.filter (isPointInRectangle initialUIElement.totalDisplayRegion)
+                                |> List.head
+
+                        projectedTargetClickLocation =
+                            previousStepClickOnTargetLocation
+                                |> Maybe.withDefault (centerFromDisplayRegion initialUIElement.totalDisplayRegion)
+
+                        cascadeFirstElementEdgesClosestPointToTargetUIElement =
+                            projectedTargetClickLocation
+                                |> closestPointOnRectangleEdge cascadeFirstElement.uiNode.totalDisplayRegion
+
                         cascadeFirstElementIsCloseToInitialUIElement =
-                            cornersFromDisplayRegion cascadeFirstElement.uiNode.totalDisplayRegion
-                                |> List.any
-                                    (\corner ->
-                                        doesPointIntersectRegion corner
-                                            (initialUIElement.totalDisplayRegion |> growRegionOnAllSides 20)
-                                    )
+                            EveOnline.BotFramework.distanceSquaredBetweenLocations
+                                projectedTargetClickLocation
+                                cascadeFirstElementEdgesClosestPointToTargetUIElement
+                                < 400
+
+                        cascadeFirstElementIsInExpectedRegion =
+                            cascadeFirstElementIsCloseToInitialUIElement
+
+                        describeLocation location =
+                            String.fromInt location.x ++ ", " ++ String.fromInt location.y
                     in
-                    if not cascadeFirstElementIsCloseToInitialUIElement then
-                        Common.DecisionPath.describeBranch "Existing cascade is too far away"
+                    if not cascadeFirstElementIsInExpectedRegion then
+                        Common.DecisionPath.describeBranch
+                            ("Existing context menu is not in expected region ("
+                                ++ Maybe.withDefault "none" (Maybe.map describeLocation previousStepClickOnTargetLocation)
+                                ++ ")"
+                            )
                             beginCascade
 
                     else if
                         (context.readingFromGameClient.contextMenus |> List.map identifyingInfoFromContextMenu)
                             == (previousReadingFromGameClient.contextMenus |> List.map identifyingInfoFromContextMenu)
                     then
-                        Common.DecisionPath.describeBranch "Made no progress in existing cascade"
+                        Common.DecisionPath.describeBranch "Made no progress in existing context menu cascade"
                             beginCascade
 
                     else
