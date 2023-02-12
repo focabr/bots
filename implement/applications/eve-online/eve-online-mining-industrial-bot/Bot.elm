@@ -40,7 +40,7 @@
 -}
 {-
    catalog-tags:eve-online,mining,orca,porpoise,industrial
-   authors-forum-usernames:focabr
+   authors-forum-usernames:viir,focabr
 -}
 {-
    TODO:
