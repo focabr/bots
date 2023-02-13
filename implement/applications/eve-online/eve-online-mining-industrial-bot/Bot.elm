@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-02-08
+{- EVE Online mining bot for industrial ship version 2023-02-12
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
