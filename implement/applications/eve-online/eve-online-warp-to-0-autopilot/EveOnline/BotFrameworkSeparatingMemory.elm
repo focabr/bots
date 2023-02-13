@@ -105,6 +105,13 @@ type alias Rect2dStructure =
     }
 
 
+type alias FilterToDiscardContextMenu settings memory =
+    { targetUIElement : UIElement }
+    -> StepDecisionContext settings memory
+    -> EveOnline.ParseUserInterface.ContextMenu
+    -> Maybe String
+
+
 millisecondsToNextReadingFromGameDefault : Int
 millisecondsToNextReadingFromGameDefault =
     1500
@@ -273,10 +280,42 @@ useContextMenuCascadeOnListSurroundingsButton useContextMenu context =
             Common.DecisionPath.describeBranch "I do not see the location info panel." askForHelpToGetUnstuck
 
         Just infoPanelLocationInfo ->
-            useContextMenuCascade
-                ( "surroundings button", infoPanelLocationInfo.listSurroundingsButton )
+            useContextMenuCascadeWithCustomConfig
+                filterToDiscardContextMenuOnListSurroundingsButton
+                { targetUIElement = infoPanelLocationInfo.listSurroundingsButton
+                , targetUIElementName = "surroundings button"
+                }
                 useContextMenu
                 context
+
+
+filterToDiscardContextMenuOnListSurroundingsButton : FilterToDiscardContextMenu a b
+filterToDiscardContextMenuOnListSurroundingsButton =
+    \target context cascadeFirstElement ->
+        discardContextMenuIfTooDistantFromTargetElement { toleratedDistance = 30 } target context cascadeFirstElement
+            |> Maybe.andThen
+                (\reasonToDiscard ->
+                    if
+                        (cascadeFirstElement.uiNode.totalDisplayRegion.x < 100)
+                            && (cascadeFirstElement.uiNode.totalDisplayRegion.y < 100)
+                    then
+                        {-
+                           Adapt to game client from session-recording-2023-02-11T16-17-12, shared by Foivos Saropoulos at <https://forum.botlab.org/t/mining-bot-warping-to-a-new-asteroid-belt-if-a-spacific-npc-is-present/4571/14>
+
+                           In event 708, we see how the game client differed from the previous ones: When clicking on the surroundings button in the info panel, it placed the new context menu at the upper left corner of the game client window.
+                           In the earlier training data, the game clients always opened the context menu so that at least an edge was close to the mouse cursor.
+                           The unusual placement is why you got the 'Existing cascade is too far away' error: When seeing this inconsistency, the bot assumed the context menu belonged to another entity.
+                        -}
+                        Nothing
+
+                    else
+                        Just reasonToDiscard
+                )
+
+
+filterToDiscardContextMenuDefault : FilterToDiscardContextMenu a b
+filterToDiscardContextMenuDefault =
+    discardContextMenuIfTooDistantFromTargetElement { toleratedDistance = 20 }
 
 
 useContextMenuCascade :
@@ -284,7 +323,19 @@ useContextMenuCascade :
     -> UseContextMenuCascadeNode
     -> StepDecisionContext a b
     -> DecisionPathNode
-useContextMenuCascade ( initialUIElementName, initialUIElement ) useContextMenu context =
+useContextMenuCascade ( targetUIElementName, targetUIElement ) =
+    useContextMenuCascadeWithCustomConfig
+        filterToDiscardContextMenuDefault
+        { targetUIElement = targetUIElement, targetUIElementName = targetUIElementName }
+
+
+useContextMenuCascadeWithCustomConfig :
+    FilterToDiscardContextMenu a b
+    -> { targetUIElement : UIElement, targetUIElementName : String }
+    -> UseContextMenuCascadeNode
+    -> StepDecisionContext a b
+    -> DecisionPathNode
+useContextMenuCascadeWithCustomConfig filterToDiscardContextMenu target useContextMenu context =
     let
         readingFromGameClient =
             context.readingFromGameClient
@@ -297,7 +348,7 @@ useContextMenuCascade ( initialUIElementName, initialUIElement ) useContextMenu 
 
                 regionsRemainingAfterOcclusion =
                     subtractRegionsFromRegion
-                        { minuend = initialUIElement.totalDisplayRegion, subtrahend = occludingRegionsWithSafetyMargin }
+                        { minuend = target.targetUIElement.totalDisplayRegion, subtrahend = occludingRegionsWithSafetyMargin }
             in
             case
                 regionsRemainingAfterOcclusion
@@ -306,11 +357,24 @@ useContextMenuCascade ( initialUIElementName, initialUIElement ) useContextMenu 
                     |> List.head
             of
                 Nothing ->
+                    let
+                        clickLocation =
+                            context.readingFromGameClient.neocom
+                                |> Maybe.andThen .clock
+                                |> Maybe.map
+                                    (\clock ->
+                                        { x = clock.uiNode.totalDisplayRegion.x + clock.uiNode.totalDisplayRegion.width // 2
+                                        , y = clock.uiNode.totalDisplayRegion.y - 10
+                                        }
+                                    )
+                                |> Maybe.withDefault
+                                    { x = 4, y = context.readingFromGameClient.uiTree.totalDisplayRegion.height - 30 }
+                    in
                     Common.DecisionPath.describeBranch
-                        ("All of " ++ initialUIElementName ++ " is occluded by context menus.")
+                        ("All of " ++ target.targetUIElementName ++ " is occluded by context menus.")
                         (Common.DecisionPath.describeBranch
                             "Click somewhere else to get rid of the occluding elements."
-                            ({ x = 4, y = 4 }
+                            (clickLocation
                                 |> Common.EffectOnWindow.effectsMouseClickAtLocation Common.EffectOnWindow.MouseButtonRight
                                 |> decideActionForCurrentStep
                             )
@@ -318,12 +382,17 @@ useContextMenuCascade ( initialUIElementName, initialUIElement ) useContextMenu 
 
                 Just preferredRegion ->
                     Common.DecisionPath.describeBranch
-                        ("Open context menu on " ++ initialUIElementName)
+                        ("Open context menu on " ++ target.targetUIElementName)
                         (preferredRegion
                             |> centerFromDisplayRegion
                             |> Common.EffectOnWindow.effectsMouseClickAtLocation Common.EffectOnWindow.MouseButtonRight
                             |> decideActionForCurrentStep
                         )
+
+        discardExistingContextMenu reasonToDiscard =
+            Common.DecisionPath.describeBranch
+                ("Discard existing context menu (" ++ reasonToDiscard ++ ")")
+                beginCascade
     in
     case context.previousReadingsFromGameClient |> List.take 3 |> List.reverse |> List.head of
         Nothing ->
@@ -335,88 +404,105 @@ useContextMenuCascade ( initialUIElementName, initialUIElement ) useContextMenu 
                     beginCascade
 
                 cascadeFirstElement :: cascadeFollowingElements ->
-                    let
-                        previousStepClickOnTargetLocation =
-                            context.previousStepEffects
-                                |> EveOnline.BotFramework.findMouseButtonClickLocationsInListOfEffects Common.EffectOnWindow.MouseButtonRight
-                                |> List.filter (isPointInRectangle initialUIElement.totalDisplayRegion)
-                                |> List.head
+                    case
+                        filterToDiscardContextMenu
+                            { targetUIElement = target.targetUIElement }
+                            context
+                            cascadeFirstElement
+                    of
+                        Just reasonToDiscard ->
+                            discardExistingContextMenu reasonToDiscard
 
-                        projectedTargetClickLocation =
-                            previousStepClickOnTargetLocation
-                                |> Maybe.withDefault (centerFromDisplayRegion initialUIElement.totalDisplayRegion)
+                        Nothing ->
+                            if
+                                (context.readingFromGameClient.contextMenus |> List.map identifyingInfoFromContextMenu)
+                                    == (previousReadingFromGameClient.contextMenus |> List.map identifyingInfoFromContextMenu)
+                            then
+                                discardExistingContextMenu "no progress in previous step"
 
-                        cascadeFirstElementEdgesClosestPointToTargetUIElement =
-                            projectedTargetClickLocation
-                                |> closestPointOnRectangleEdge cascadeFirstElement.uiNode.totalDisplayRegion
+                            else
+                                case
+                                    useContextMenu
+                                        |> unpackContextMenuTreeToListOfActionsDependingOnReadings
+                                        {-
+                                           2023-01-12 Adapt to behavior of menu from surroundings button:
+                                           When opening that menu, the game client opens not only the first level but sometimes also expands the 'stations' entry so that we immediately also have the second level on screen.
+                                        -}
+                                        |> List.drop
+                                            (min
+                                                (List.length cascadeFollowingElements)
+                                                (context.contextMenuCascadeLevel - 1)
+                                            )
+                                        |> List.head
+                                of
+                                    Nothing ->
+                                        beginCascade
 
-                        cascadeFirstElementIsCloseToInitialUIElement =
-                            EveOnline.BotFramework.distanceSquaredBetweenLocations
-                                projectedTargetClickLocation
-                                cascadeFirstElementEdgesClosestPointToTargetUIElement
-                                < 400
+                                    Just descriptionAndEffectsFromReading ->
+                                        let
+                                            readingFromGameClientForSelectingMenuEntry =
+                                                { readingFromGameClient
+                                                    | contextMenus =
+                                                        readingFromGameClient.contextMenus
+                                                            |> List.reverse
+                                                            |> List.take context.contextMenuCascadeLevel
+                                                            |> List.reverse
+                                                }
 
-                        cascadeFirstElementIsInExpectedRegion =
-                            cascadeFirstElementIsCloseToInitialUIElement
+                                            ( stepDescription, maybeEffectsToGameClient ) =
+                                                descriptionAndEffectsFromReading readingFromGameClientForSelectingMenuEntry
+                                        in
+                                        Common.DecisionPath.describeBranch stepDescription
+                                            (case maybeEffectsToGameClient of
+                                                Nothing ->
+                                                    beginCascade
 
-                        describeLocation location =
-                            String.fromInt location.x ++ ", " ++ String.fromInt location.y
-                    in
-                    if not cascadeFirstElementIsInExpectedRegion then
-                        Common.DecisionPath.describeBranch
-                            ("Existing context menu is not in expected region ("
-                                ++ Maybe.withDefault "none" (Maybe.map describeLocation previousStepClickOnTargetLocation)
-                                ++ ")"
-                            )
-                            beginCascade
+                                                Just effectsToGameClient ->
+                                                    decideActionForCurrentStep effectsToGameClient
+                                            )
 
-                    else if
-                        (context.readingFromGameClient.contextMenus |> List.map identifyingInfoFromContextMenu)
-                            == (previousReadingFromGameClient.contextMenus |> List.map identifyingInfoFromContextMenu)
-                    then
-                        Common.DecisionPath.describeBranch "Made no progress in existing context menu cascade"
-                            beginCascade
 
-                    else
-                        case
-                            useContextMenu
-                                |> unpackContextMenuTreeToListOfActionsDependingOnReadings
-                                {-
-                                   2023-01-12 Adapt to behavior of menu from surroundings button:
-                                   When opening that menu, the game client opens not only the first level but sometimes also expands the 'stations' entry so that we immediately also have the second level on screen.
-                                -}
-                                |> List.drop
-                                    (min
-                                        (List.length cascadeFollowingElements)
-                                        (context.contextMenuCascadeLevel - 1)
-                                    )
-                                |> List.head
-                        of
-                            Nothing ->
-                                beginCascade
+discardContextMenuIfTooDistantFromTargetElement :
+    { toleratedDistance : Int }
+    -> FilterToDiscardContextMenu a b
+discardContextMenuIfTooDistantFromTargetElement { toleratedDistance } =
+    \{ targetUIElement } context cascadeFirstElement ->
+        let
+            previousStepClickOnTargetLocation =
+                context.previousStepEffects
+                    |> EveOnline.BotFramework.findMouseButtonClickLocationsInListOfEffects Common.EffectOnWindow.MouseButtonRight
+                    |> List.filter (isPointInRectangle targetUIElement.totalDisplayRegion)
+                    |> List.head
 
-                            Just descriptionAndEffectsFromReading ->
-                                let
-                                    readingFromGameClientForSelectingMenuEntry =
-                                        { readingFromGameClient
-                                            | contextMenus =
-                                                readingFromGameClient.contextMenus
-                                                    |> List.reverse
-                                                    |> List.take context.contextMenuCascadeLevel
-                                                    |> List.reverse
-                                        }
+            projectedTargetClickLocation =
+                previousStepClickOnTargetLocation
+                    |> Maybe.withDefault (centerFromDisplayRegion targetUIElement.totalDisplayRegion)
 
-                                    ( stepDescription, maybeEffectsToGameClient ) =
-                                        descriptionAndEffectsFromReading readingFromGameClientForSelectingMenuEntry
-                                in
-                                Common.DecisionPath.describeBranch stepDescription
-                                    (case maybeEffectsToGameClient of
-                                        Nothing ->
-                                            beginCascade
+            cascadeFirstElementEdgesClosestPointToTargetUIElement =
+                projectedTargetClickLocation
+                    |> closestPointOnRectangleEdge cascadeFirstElement.uiNode.totalDisplayRegion
 
-                                        Just effectsToGameClient ->
-                                            decideActionForCurrentStep effectsToGameClient
-                                    )
+            cascadeFirstElementIsCloseToInitialUIElement =
+                EveOnline.BotFramework.distanceSquaredBetweenLocations
+                    projectedTargetClickLocation
+                    cascadeFirstElementEdgesClosestPointToTargetUIElement
+                    < (toleratedDistance * toleratedDistance)
+
+            cascadeFirstElementIsInExpectedRegion =
+                cascadeFirstElementIsCloseToInitialUIElement
+
+            describeLocation location =
+                String.fromInt location.x ++ ", " ++ String.fromInt location.y
+        in
+        if not cascadeFirstElementIsInExpectedRegion then
+            Just
+                ("not in expected region ("
+                    ++ Maybe.withDefault "none" (Maybe.map describeLocation previousStepClickOnTargetLocation)
+                    ++ ")"
+                )
+
+        else
+            Nothing
 
 
 identifyingInfoFromContextMenu : { a | uiNode : { b | totalDisplayRegion : c } } -> c
