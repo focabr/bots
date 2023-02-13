@@ -1,18 +1,26 @@
 {- EVE Online mining bot for industrial ship version 2023-02-08
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
-   If no station name or structure name is given with the bot-settings, the bot docks again at the station where it was last docked.
 
-   Setup instructions for the EVE Online client:
+   ## Features
+
+   + If no station name or structure name is given with the bot-settings, the bot docks again at the station where it was last docked.
+   + If you want the industrial ship to warp to a pilot of your fleet, add him to a whatchlist and open the 'watchlist' window.
+
+   ## Setting up the Game Client
+
+   Despite being quite robust, this bot is less intelligent than a human. For example, his perception is more limited than ours, so we need to configure the game to make sure the bot sees everything it needs to, and we're going to hide some things it doesn't need, here's a list of configuration instructions for the EVE client Online:
 
    + Set the UI language to English.
-   + In the ship UI in the 'Options' menu, tick the checkbox for 'Display Module Tooltips'.
    + In Overview window, make asteroids visible.
    + Set the Overview window to sort objects in space by distance with the nearest entry at the top.
+   + In the ship UI in the 'Options' menu:
+     + Hide passive modules by disabling the checkbox 'Display Passive Modules'.
+     + Tick the checkbox for 'Display Module Tooltips' to enabled.
    + Open one inventory window.
-   + If you want to use drones for defense against rats, place them in the drone bay, and open the 'Drones' window.
-   + If you want to use mining drones, place them in the drone bay, set mining-using-drones=yes and open the 'Drones' window.
-   + If you want the industrial ship to warp to a pilot of your fleet, add him to a whatchlist and open the 'watchlist' window.
+   + If you want to use drones, place them in the drone bay and open the 'Drones' window. Be careful not to mix different groups of drones in the drone bay!
+     + drones for defense against rats
+     + drones for mining ore, set mining-using-drones=yes
 
    ## Configuration Settings
 
@@ -22,8 +30,8 @@
    + `unload-structure-name` : Name of a structure to dock to when the mining hold is full.
    + `activate-module-always` : Text found in tooltips of ship modules that should always be active. For example: "shield hardener".
    + `hide-when-neutral-in-local` : Should we hide when a neutral or hostile pilot appears in the local chat? The only supported values are `no` and `yes`.
-   + `unload-fleet-hangar-percent` : This will make the bot to unload the fleet hangar at least 65 (default) percent full to the mining hold.
-   + `dock-when-without-drones` : This will make the bot dock when it's out of drones. The only supported values are `no` and `yes`.
+   + `unload-fleet-hangar-percent` : This will make the bot to unload the fleet hangar at least 65% (default) into the mining hold.
+   + `dock-when-without-drones` : This will make the bot dock when it is out of drones. The only supported values are `no` and `yes`.
    + `mining-using-drones` : This will make the bot lock an asteroid and send the drone them to mine. The only supported values are `no` and `yes`.
 
    When using more than one setting, start a new line for each setting in the text input field.
@@ -31,8 +39,8 @@
 
    ```
    unload-station-name = Noghere VII - Moon 15
-   activate-module-always = shield hardener
-   activate-module-always = afterburner
+   activate-module-always = shield command burst ii
+   activate-module-always = mining foreman burst ii
    ```
 
    To learn more about the mining bot, see <https://to.botlab.org/guide/app/eve-online-mining-bot>
@@ -43,6 +51,12 @@
    authors-forum-usernames:viir,focabr
 -}
 {-
+   FIXME:
+   - Descarregar o fleet hangar na estação junto com o mining ore
+   - Na hora de descarregar o mine corrigir a desativação dos modulos
+   - Deixar o ultimo valor do mining ore
+
+
    TODO:
    - When the mining hold reaches 99% stop moving the ores from the fleet hangar to the mining hold.
    - Create a function to enable the compression module and then select all the ores in the mining hold and compress them, execute this whenever you reach the limit of 80% of the mining hold, check if you have fuel beforehand and if the compression parameter is enabled.
@@ -1422,9 +1436,10 @@ statusTextFromDecisionContext context =
     in
     [ "Session performance: " ++ describeSessionPerformance
     , "---"
-    , "" ++ (context.readingFromGameClient.layerAbovemain
+    , ""
+        ++ (context.readingFromGameClient.layerAbovemain
                 |> Debug.toString
-    )
+           )
     , "---"
     , "Current reading: " ++ describeCurrentReading
     ]
