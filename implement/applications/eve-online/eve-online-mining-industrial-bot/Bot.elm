@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-02-12
+{- EVE Online mining bot for industrial ship version 2023-02-13
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -47,18 +47,17 @@
 
 -}
 {-
-   catalog-tags:eve-online,mining,orca,porpoise,industrial
+   catalog-tags:eve-online,mining-industrial,orca,porpoise
    authors-forum-usernames:viir,focabr
 -}
 {-
    FIXME:
-   - Descarregar o fleet hangar na estação junto com o mining ore
-   - Na hora de descarregar o mine corrigir a desativação dos modulos
-   - Deixar o ultimo valor do mining ore
-
+   - lastVisibleCapacityGaugeUsedPercentInMiningHold, never updated
 
    TODO:
-   - When the mining hold reaches 99% stop moving the ores from the fleet hangar to the mining hold.
+   - Inactivate 'activate-module-always' before docking.
+   - Unload the fleet hangar along with mining ore when docked
+   - secondsToSessionEnd, not sending the ship to dock
    - Create a function to enable the compression module and then select all the ores in the mining hold and compress them, execute this whenever you reach the limit of 80% of the mining hold, check if you have fuel beforehand and if the compression parameter is enabled.
    - Study a way that the bot can detect the types of drones (attack or mine). If he detects the rats, return the mining drones to the drone bay and launch attack drones to kill the rats, then launch mine drones to return to mining.
 -}
@@ -230,6 +229,7 @@ type alias BotMemory =
     , timesUnloaded : Int
     , volumeUnloadedCubicMeters : Int
     , lastUsedCapacityInMiningHold : Maybe Int
+    , lastVisibleCapacityGaugeUsedPercentInMiningHold : Maybe Int
     , shipModules : ShipModulesMemory
     , lastReadingsInSpaceDronesWindowWasVisible : List Bool
     }
@@ -394,7 +394,9 @@ returnDronesAndRunAwayIfHitpointsAreTooLowOrWithoutDrones context shipUI =
             && shouldDockBecauseDroneWindowWasInvisibleTooLong context.memory
     then
         Just
-            (describeBranch "I don't see the drone window, are we out of drones? configured to run away when without a drone. Run to the station!" (dockToUnloadOre context))
+            (describeBranch "I don't see the drone window, are we out of drones? configured to run away when without a drone. Run to the station!"
+                (dockToUnloadOre context)
+            )
 
     else
         Nothing
@@ -501,7 +503,7 @@ inSpaceWithFleetHangarSelectedWithFleetHangar _ inventoryWindowWithFleetHangarSe
             in
             case maybeMiningHoldFromInventory |> Maybe.map .uiNode of
                 Nothing ->
-                    describeBranch "I do not see the mining hold in the inventory." askForHelpToGetUnstuck
+                    describeBranch "I do not see the fleet hangar in the inventory." askForHelpToGetUnstuck
 
                 Just miningHoldFromInventory ->
                     case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
@@ -588,7 +590,7 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
             Nothing ->
                 case inventoryWindowWithFleetHangarSelected |> capacityGaugeUsedPercent of
                     Nothing ->
-                        describeBranch "I do not see the mining hold capacity gauge." askForHelpToGetUnstuck
+                        describeBranch "I do not see the fleet hangar capacity gauge." askForHelpToGetUnstuck
 
                     Just fillPercent ->
                         let
@@ -604,7 +606,21 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
                                     |> Maybe.withDefault (dockToUnloadOre context)
                                 )
 
-                        else if context.eventContext.botSettings.unloadFleetHangarPercent > 0 && context.eventContext.botSettings.unloadFleetHangarPercent <= fillPercent then
+                        else if
+                            0
+                                < context.eventContext.botSettings.unloadFleetHangarPercent
+                                && fillPercent
+                                >= context.eventContext.botSettings.unloadFleetHangarPercent
+                                && 99
+                                > (context.memory.lastVisibleCapacityGaugeUsedPercentInMiningHold
+                                    |> Maybe.withDefault 0
+                                  )
+                        then
+                            let
+                                isUpdateCapacityGaugeUsedPercentInMiningHold =
+                                    ensureMiningHoldIsSelectedInInventoryWindow
+                                        context.readingFromGameClient
+                            in
                             describeBranch ("The fleet hangar is filled at least " ++ describeThresholdToUnloadFleetHangar ++ ". Unload the ore on mining hold.")
                                 (ensureFleetHangarIsSelectedInInventoryWindow
                                     context.readingFromGameClient
@@ -1026,34 +1042,33 @@ runAway =
 
 dockToUnloadOre : BotDecisionContext -> DecisionPathNode
 dockToUnloadOre context =
-    case context |> knownModulesToActivateAlways |> List.filter (Tuple.second >> .isActive >> Maybe.withDefault False) |> List.head of
-        Just ( activeModuleMatchingText, activeModule ) ->
-            describeBranch ("I see active module '" ++ activeModuleMatchingText ++ "' to activate always. Inactivate it before docking.")
-                (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
+    -- case context |> knownModulesToActivateAlways |> List.filter (Tuple.second >> moduleIsActiveOrReloading) |> List.head of
+    --     Just ( activeModuleMatchingText, activeModule ) ->
+    --         describeBranch ("I see active module '" ++ activeModuleMatchingText ++ "' to activate always. Inactivate it before docking.")
+    --             (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
+    --     Nothing ->
+    case context.eventContext.botSettings.unloadStationName of
+        Just unloadStationName ->
+            dockToStationOrStructureWithMatchingName
+                { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
+                context
 
         Nothing ->
-            case context.eventContext.botSettings.unloadStationName of
-                Just unloadStationName ->
+            case context.eventContext.botSettings.unloadStructureName of
+                Just unloadStructureName ->
                     dockToStationOrStructureWithMatchingName
-                        { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
+                        { prioritizeStructures = True, nameFromSettingOrInfoPanel = unloadStructureName }
                         context
 
                 Nothing ->
-                    case context.eventContext.botSettings.unloadStructureName of
-                        Just unloadStructureName ->
+                    case context.memory.lastDockedStationNameFromInfoPanel of
+                        Just unloadStationName ->
                             dockToStationOrStructureWithMatchingName
-                                { prioritizeStructures = True, nameFromSettingOrInfoPanel = unloadStructureName }
+                                { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
                                 context
 
                         Nothing ->
-                            case context.memory.lastDockedStationNameFromInfoPanel of
-                                Just unloadStationName ->
-                                    dockToStationOrStructureWithMatchingName
-                                        { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
-                                        context
-
-                                Nothing ->
-                                    describeBranch "At which station should I dock?. I was never docked in a station in this session." askForHelpToGetUnstuck
+                            describeBranch "At which station should I dock?. I was never docked in a station in this session." askForHelpToGetUnstuck
 
 
 dockToRandomStationOrStructure : BotDecisionContext -> DecisionPathNode
@@ -1329,6 +1344,12 @@ tooltipLooksLikeModuleToActivateAlways context =
         >> List.head
 
 
+moduleIsActiveOrReloading : EveOnline.ParseUserInterface.ShipUIModuleButton -> Bool
+moduleIsActiveOrReloading moduleButton =
+    (moduleButton.isActive |> Maybe.withDefault False)
+        || ((moduleButton.rampRotationMilli |> Maybe.withDefault 0) /= 0)
+
+
 botMain : InterfaceToHost.BotConfig State
 botMain =
     { init = EveOnline.BotFrameworkSeparatingMemory.initState initBotMemory
@@ -1352,6 +1373,7 @@ initBotMemory =
     , timesUnloaded = 0
     , volumeUnloadedCubicMeters = 0
     , lastUsedCapacityInMiningHold = Nothing
+    , lastVisibleCapacityGaugeUsedPercentInMiningHold = Nothing
     , shipModules = EveOnline.BotFramework.initShipModulesMemory
     , lastReadingsInSpaceDronesWindowWasVisible = []
     }
@@ -1411,16 +1433,6 @@ statusTextFromDecisionContext context =
                            )
                         ++ "."
 
-        describeMiningHold =
-            "mining hold filled "
-                ++ (readingFromGameClient
-                        |> inventoryWindowWithMiningHoldSelectedFromGameClient
-                        |> Maybe.andThen capacityGaugeUsedPercent
-                        |> Maybe.map String.fromInt
-                        |> Maybe.withDefault "Unknown"
-                   )
-                ++ "%."
-
         describeFleetHangar =
             "fleet hangar filled "
                 ++ (readingFromGameClient
@@ -1431,15 +1443,18 @@ statusTextFromDecisionContext context =
                    )
                 ++ "%."
 
+        describeMiningHold =
+            "mining hold filled "
+                ++ (context.memory.lastVisibleCapacityGaugeUsedPercentInMiningHold
+                        |> Maybe.map String.fromInt
+                        |> Maybe.withDefault "Unknown"
+                   )
+                ++ "%."
+
         describeCurrentReading =
-            [ describeMiningHold, describeFleetHangar, describeShip, describeDrones ] |> String.join " "
+            [ describeFleetHangar, describeMiningHold, describeShip, describeDrones ] |> String.join " "
     in
     [ "Session performance: " ++ describeSessionPerformance
-    , "---"
-    , ""
-        ++ (context.readingFromGameClient.layerAbovemain
-                |> Debug.toString
-           )
     , "---"
     , "Current reading: " ++ describeCurrentReading
     ]
@@ -1496,6 +1511,18 @@ updateMemoryForNewReadingFromGame context botMemoryBefore =
         volumeUnloadedCubicMeters =
             botMemoryBefore.volumeUnloadedCubicMeters + volumeUnloadedSincePreviousReading
 
+        lastVisibleCapacityGaugeUsedPercentInMiningHold =
+            case
+                context.readingFromGameClient
+                    |> inventoryWindowWithMiningHoldSelectedFromGameClient
+                    |> Maybe.andThen capacityGaugeUsedPercent
+            of
+                Nothing ->
+                    botMemoryBefore.lastVisibleCapacityGaugeUsedPercentInMiningHold
+
+                Just capacityGaugeUsedPercentInMiningHold ->
+                    Just capacityGaugeUsedPercentInMiningHold
+
         lastReadingsInSpaceDronesWindowWasVisible =
             if context.readingFromGameClient.shipUI == Nothing then
                 botMemoryBefore.lastReadingsInSpaceDronesWindowWasVisible
@@ -1512,6 +1539,7 @@ updateMemoryForNewReadingFromGame context botMemoryBefore =
     , timesUnloaded = timesUnloaded
     , volumeUnloadedCubicMeters = volumeUnloadedCubicMeters
     , lastUsedCapacityInMiningHold = lastUsedCapacityInMiningHold
+    , lastVisibleCapacityGaugeUsedPercentInMiningHold = lastVisibleCapacityGaugeUsedPercentInMiningHold
     , shipModules =
         botMemoryBefore.shipModules
             |> EveOnline.BotFramework.integrateCurrentReadingsIntoShipModulesMemory context.readingFromGameClient
