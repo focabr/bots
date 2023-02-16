@@ -1,11 +1,11 @@
-{- EVE Online mining bot for industrial ship version 2023-02-13
+{- EVE Online mining bot for industrial ship version 2023-02-14
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
    ## Features
 
    + If no station name or structure name is given with the bot-settings, the bot docks again at the station where it was last docked.
-   + If you want the industrial ship to warp to a pilot of your fleet, add him to a whatchlist and open the 'watchlist' window.
+   + If you want the industrial ship to warp to a pilot of your fleet, add him to a watchlist and open the 'watchlist' window.
 
    ## Setting up the Game Client
 
@@ -51,15 +51,18 @@
    authors-forum-usernames:viir,focabr
 -}
 {-
-   FIXME:
-   - lastVisibleCapacityGaugeUsedPercentInMiningHold, never updated
-
-   TODO:
+   TODO:  eve-online-mining-industrial
    - Inactivate 'activate-module-always' before docking.
-   - Unload the fleet hangar along with mining ore when docked
    - secondsToSessionEnd, not sending the ship to dock
    - Create a function to enable the compression module and then select all the ores in the mining hold and compress them, execute this whenever you reach the limit of 80% of the mining hold, check if you have fuel beforehand and if the compression parameter is enabled.
    - Study a way that the bot can detect the types of drones (attack or mine). If he detects the rats, return the mining drones to the drone bay and launch attack drones to kill the rats, then launch mine drones to return to mining.
+
+
+   TODO: eve-online-mining
+    - secondsToSessionEnd, not sending the ship to dock
+    - Open fleet hangar with open watchlist windows when ships are orca, porpoise
+    - Pilot approach with open watch list windows
+    - detect with fleet hangar < 2500 before moving ore to fleet hangar
 -}
 
 
@@ -259,9 +262,7 @@ miningBotDecisionRootBeforeApplyingSettings context =
         |> Maybe.withDefault
             (branchDependingOnDockedOrInSpace
                 { ifDocked =
-                    ensureMiningHoldIsSelectedInInventoryWindow
-                        context.readingFromGameClient
-                        (dockedWithMiningHoldSelected context)
+                    unLoadOreDocked context
                 , ifSeeShipUI =
                     returnDronesAndRunAwayIfHitpointsAreTooLowOrWithoutDrones context
                 , ifUndockingComplete =
@@ -286,6 +287,62 @@ miningBotDecisionRootBeforeApplyingSettings context =
                 }
                 context.readingFromGameClient
             )
+
+
+unLoadOreDocked : BotDecisionContext -> DecisionPathNode
+unLoadOreDocked context =
+    case context.readingFromGameClient |> inventoryWindowWithFleetHangarSelectedFromGameClient of
+        Just _ ->
+            ensureFleetHangarIsSelectedInInventoryWindow
+                context.readingFromGameClient
+                (dockedWithFleetHangarSelected context)
+
+        Nothing ->
+            case context.readingFromGameClient |> inventoryWindowWithMiningHoldSelectedFromGameClient of
+                Just _ ->
+                    ensureMiningHoldIsSelectedInInventoryWindow
+                        context.readingFromGameClient
+                        (dockedWithMiningHoldSelected context)
+
+                Nothing ->
+                    case context.readingFromGameClient.inventoryWindows |> List.head of
+                        Nothing ->
+                            describeBranch "I do not see an inventory window. Please open an inventory window." askForHelpToGetUnstuck
+
+                        Just inventoryWindow ->
+                            describeBranch
+                                "fleet hangar is not selected. Select the fleet hangar."
+                                (case inventoryWindow |> activeShipTreeEntryFromInventoryWindow of
+                                    Nothing ->
+                                        describeBranch "I do not see the active ship in the inventory." askForHelpToGetUnstuck
+
+                                    Just activeShipTreeEntry ->
+                                        let
+                                            maybeFleetHangarTreeEntry =
+                                                activeShipTreeEntry
+                                                    |> fleetHangarFromInventoryWindowShipEntry
+                                        in
+                                        case maybeFleetHangarTreeEntry of
+                                            Nothing ->
+                                                describeBranch "I do not see the fleet hangar under the active ship in the inventory."
+                                                    (case activeShipTreeEntry.toggleBtn of
+                                                        Nothing ->
+                                                            describeBranch "I do not see the toggle button to expand the active ship tree entry."
+                                                                askForHelpToGetUnstuck
+
+                                                        Just toggleBtn ->
+                                                            describeBranch "Click the toggle button to expand."
+                                                                (decideActionForCurrentStep
+                                                                    (mouseClickOnUIElement MouseButtonLeft toggleBtn)
+                                                                )
+                                                    )
+
+                                            Just fleetHangarTreeEntry ->
+                                                describeBranch "Click the tree entry representing the fleet hangar."
+                                                    (decideActionForCurrentStep
+                                                        (mouseClickOnUIElement MouseButtonLeft fleetHangarTreeEntry.uiNode)
+                                                    )
+                                )
 
 
 continueIfShouldHide : { ifShouldHide : DecisionPathNode } -> BotDecisionContext -> Maybe DecisionPathNode
@@ -439,6 +496,35 @@ closeMessageBox readingFromGameClient =
             )
 
 
+dockedWithFleetHangarSelected : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
+dockedWithFleetHangarSelected context inventoryWindowWithFleetHangarSelected =
+    case inventoryWindowWithFleetHangarSelected |> itemHangarFromInventoryWindow |> Maybe.map .uiNode of
+        Nothing ->
+            describeBranch "I do not see the item hangar in the inventory." askForHelpToGetUnstuck
+
+        Just itemHangar ->
+            case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
+                Nothing ->
+                    describeBranch "I see no item in the fleet hangar. Check if we unload the mining hold."
+                        (ensureMiningHoldIsSelectedInInventoryWindow
+                            context.readingFromGameClient
+                            (dockedWithMiningHoldSelected context)
+                        )
+
+                Just itemInInventory ->
+                    describeBranch "I see at least one item in the fleet hangar. Move this to the item hangar."
+                        (describeBranch "Drag and drop."
+                            (decideActionForCurrentStep
+                                (EffectOnWindow.effectsForDragAndDrop
+                                    { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                    , endLocation = itemHangar.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                    , mouseButton = MouseButtonLeft
+                                    }
+                                )
+                            )
+                        )
+
+
 dockedWithMiningHoldSelected : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
 dockedWithMiningHoldSelected context inventoryWindowWithMiningHoldSelected =
     case inventoryWindowWithMiningHoldSelected |> itemHangarFromInventoryWindow |> Maybe.map .uiNode of
@@ -487,8 +573,8 @@ dockedWithMiningHoldSelected context inventoryWindowWithMiningHoldSelected =
                         )
 
 
-inSpaceWithFleetHangarSelectedWithFleetHangar : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
-inSpaceWithFleetHangarSelectedWithFleetHangar _ inventoryWindowWithFleetHangarSelected =
+inSpaceWithFleetHangarSelectedMoveToMiningHold : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
+inSpaceWithFleetHangarSelectedMoveToMiningHold _ inventoryWindowWithFleetHangarSelected =
     case
         inventoryWindowWithFleetHangarSelected |> activeShipTreeEntryFromInventoryWindow
     of
@@ -515,13 +601,16 @@ inSpaceWithFleetHangarSelectedWithFleetHangar _ inventoryWindowWithFleetHangarSe
 
                         Just itemInInventory ->
                             describeBranch "I see at least one item in the fleet hangar. Move this to the mining hold."
-                                (describeBranch "Drag and drop."
+                                (describeBranch "Drag and drop, and click the tree entry representing the mining hold."
                                     (decideActionForCurrentStep
-                                        (EffectOnWindow.effectsForDragAndDrop
+                                        ([ EffectOnWindow.effectsForDragAndDrop
                                             { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
                                             , endLocation = miningHoldFromInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
                                             , mouseButton = MouseButtonLeft
                                             }
+                                         , mouseClickOnUIElement MouseButtonLeft miningHoldFromInventory
+                                         ]
+                                            |> List.concat
                                         )
                                     )
                                 )
@@ -611,20 +700,16 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
                                 < context.eventContext.botSettings.unloadFleetHangarPercent
                                 && fillPercent
                                 >= context.eventContext.botSettings.unloadFleetHangarPercent
-                                && 99
+                                -- The mining drones deliver the ore to the mining hold, hence why 97 and not 99.
+                                && 97
                                 > (context.memory.lastVisibleCapacityGaugeUsedPercentInMiningHold
                                     |> Maybe.withDefault 0
                                   )
                         then
-                            let
-                                isUpdateCapacityGaugeUsedPercentInMiningHold =
-                                    ensureMiningHoldIsSelectedInInventoryWindow
-                                        context.readingFromGameClient
-                            in
                             describeBranch ("The fleet hangar is filled at least " ++ describeThresholdToUnloadFleetHangar ++ ". Unload the ore on mining hold.")
                                 (ensureFleetHangarIsSelectedInInventoryWindow
                                     context.readingFromGameClient
-                                    (inSpaceWithFleetHangarSelectedWithFleetHangar context)
+                                    (inSpaceWithFleetHangarSelectedMoveToMiningHold context)
                                 )
 
                         else
