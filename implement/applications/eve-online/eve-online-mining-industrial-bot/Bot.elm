@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-02-14
+{- EVE Online mining bot for industrial ship version 2023-02-16
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -575,45 +575,47 @@ dockedWithMiningHoldSelected context inventoryWindowWithMiningHoldSelected =
 
 inSpaceWithFleetHangarSelectedMoveToMiningHold : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
 inSpaceWithFleetHangarSelectedMoveToMiningHold _ inventoryWindowWithFleetHangarSelected =
-    case
-        inventoryWindowWithFleetHangarSelected |> activeShipTreeEntryFromInventoryWindow
-    of
+    case inventoryWindowWithFleetHangarSelected |> activeShipTreeEntryFromInventoryWindow of
         Nothing ->
             describeBranch "I do not see the active ship in the inventory window." askForHelpToGetUnstuck
 
         Just activeShipTreeEntry ->
-            let
-                maybeMiningHoldFromInventory =
-                    activeShipTreeEntry
-                        |> miningHoldFromInventoryWindowShipEntry
-            in
-            case maybeMiningHoldFromInventory |> Maybe.map .uiNode of
+            case activeShipTreeEntry |> miningHoldFromInventoryWindowShipEntry of
                 Nothing ->
                     describeBranch "I do not see the fleet hangar in the inventory." askForHelpToGetUnstuck
 
                 Just miningHoldFromInventory ->
-                    case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
+                    case inventoryWindowWithFleetHangarSelected.buttonToStackAll of
                         Nothing ->
-                            describeBranch "I see no item in the fleet hangar. Click the tree entry representing the mining hold."
-                                (decideActionForCurrentStep
-                                    (mouseClickOnUIElement MouseButtonLeft miningHoldFromInventory)
-                                )
+                            describeBranch "I do not see the button to Stack All Items in the inventory before the move this to the mining hold."
+                                askForHelpToGetUnstuck
 
-                        Just itemInInventory ->
-                            describeBranch "I see at least one item in the fleet hangar. Move this to the mining hold."
-                                (describeBranch "Drag and drop, and click the tree entry representing the mining hold."
-                                    (decideActionForCurrentStep
-                                        ([ EffectOnWindow.effectsForDragAndDrop
-                                            { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
-                                            , endLocation = miningHoldFromInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
-                                            , mouseButton = MouseButtonLeft
-                                            }
-                                         , mouseClickOnUIElement MouseButtonLeft miningHoldFromInventory
-                                         ]
-                                            |> List.concat
+                        Just btnFleetHangarToStackAll ->
+                            case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
+                                Nothing ->
+                                    describeBranch "I see no item in the fleet hangar."
+                                        (decideActionForCurrentStep
+                                            (mouseClickOnUIElement MouseButtonLeft btnFleetHangarToStackAll)
                                         )
-                                    )
-                                )
+
+                                Just itemInInventory ->
+                                    describeBranch "I see at least one item in the fleet hangar. First Stack All."
+                                        (describeBranch "Drag and drop."
+                                            (describeBranch "click the tree entry representing the mining hold."
+                                                (decideActionForCurrentStep
+                                                    ([ mouseClickOnUIElement MouseButtonLeft btnFleetHangarToStackAll
+                                                     , EffectOnWindow.effectsForDragAndDrop
+                                                        { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                                        , endLocation = miningHoldFromInventory.uiNode.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                                        , mouseButton = MouseButtonLeft
+                                                        }
+                                                     , mouseClickOnUIElement MouseButtonLeft miningHoldFromInventory.uiNode
+                                                     ]
+                                                        |> List.concat
+                                                    )
+                                                )
+                                            )
+                                        )
 
 
 undockUsingStationWindow :
@@ -829,6 +831,63 @@ warpToOverviewEntryIfFarEnough context destinationOverviewEntry =
 
         Err error ->
             Just (describeBranch ("Failed to read the distance: " ++ error) askForHelpToGetUnstuck)
+
+
+
+-- ensureTheInventoryIsSelectedInInventoryWindow :
+--     ReadingFromGameClient
+--     -> { chooseInventoryWindow : String }
+--     -> (EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode)
+--     -> DecisionPathNode
+-- ensureTheInventoryIsSelectedInInventoryWindow readingFromGameClient { chooseInventoryWindow } continueWithInventoryWindow =
+--     let
+--         maybeFleetOrMiningInventoryInInventoryWindow =
+--             if chooseInventoryWindow == "FleetHangar" then
+--                 inventoryWindowWithFleetHangarSelectedFromGameClient
+--             else
+--                 inventoryWindowWithMiningHoldSelectedFromGameClient
+--     in
+--     case readingFromGameClient |> maybeFleetOrMiningInventoryInInventoryWindow of
+--         Just inventoryWindow ->
+--             continueWithInventoryWindow inventoryWindow
+--         Nothing ->
+--             case readingFromGameClient.inventoryWindows |> List.head of
+--                 Nothing ->
+--                     describeBranch "I do not see an inventory window. Please open an inventory window." askForHelpToGetUnstuck
+--                 Just inventoryWindow ->
+--                     describeBranch
+--                         "???? is not selected. Select the ?????."
+--                         (case inventoryWindow |> activeShipTreeEntryFromInventoryWindow of
+--                             Nothing ->
+--                                 describeBranch "I do not see the active ship in the inventory." askForHelpToGetUnstuck
+--                             Just activeShipTreeEntry ->
+--                                 let
+--                                     maybeMiningHoldTreeEntry =
+--                                         activeShipTreeEntry
+--                                             |> miningHoldFromInventoryWindowShipEntry
+--                                     maybeFleetHangarTreeEntry =
+--                                         activeShipTreeEntry
+--                                             |> fleetHangarFromInventoryWindowShipEntry
+--                                 in
+--                                 case maybeMiningHoldTreeEntry of
+--                                     Nothing ->
+--                                         describeBranch "I do not see the mining hold under the active ship in the inventory."
+--                                             (case activeShipTreeEntry.toggleBtn of
+--                                                 Nothing ->
+--                                                     describeBranch "I do not see the toggle button to expand the active ship tree entry."
+--                                                         askForHelpToGetUnstuck
+--                                                 Just toggleBtn ->
+--                                                     describeBranch "Click the toggle button to expand."
+--                                                         (decideActionForCurrentStep
+--                                                             (mouseClickOnUIElement MouseButtonLeft toggleBtn)
+--                                                         )
+--                                             )
+--                                     Just miningHoldTreeEntry ->
+--                                         describeBranch "Click the tree entry representing the mining hold."
+--                                             (decideActionForCurrentStep
+--                                                 (mouseClickOnUIElement MouseButtonLeft miningHoldTreeEntry.uiNode)
+--                                             )
+--                         )
 
 
 ensureMiningHoldIsSelectedInInventoryWindow : ReadingFromGameClient -> (EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode) -> DecisionPathNode
