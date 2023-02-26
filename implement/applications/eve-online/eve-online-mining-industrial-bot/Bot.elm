@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-02-16
+{- EVE Online mining bot for industrial ship version 2023-02-25
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -85,7 +85,6 @@ import EveOnline.BotFramework
         , ShipModulesMemory
         , UIElement
         , doEffectsClickModuleButton
-        , getEntropyIntFromReadingFromGameClient
         , localChatWindowFromUserInterface
         , menuCascadeCompleted
         , mouseClickOnUIElement
@@ -347,36 +346,46 @@ unLoadOreDocked context =
 
 continueIfShouldHide : { ifShouldHide : DecisionPathNode } -> BotDecisionContext -> Maybe DecisionPathNode
 continueIfShouldHide config context =
-    if not (context |> shouldHideWhenNeutralInLocal) then
-        Nothing
+    case
+        context.eventContext |> EveOnline.BotFramework.secondsToSessionEnd |> Maybe.andThen (nothingFromIntIfGreaterThan 200)
+    of
+        Just secondsToSessionEnd ->
+            Just
+                (describeBranch ("Session ends in " ++ (secondsToSessionEnd |> String.fromInt) ++ " seconds.")
+                    config.ifShouldHide
+                )
 
-    else
-        case context.readingFromGameClient |> localChatWindowFromUserInterface of
-            Nothing ->
-                Just (describeBranch "I don't see the local chat window." askForHelpToGetUnstuck)
+        Nothing ->
+            if not (context |> shouldHideWhenNeutralInLocal) then
+                Nothing
 
-            Just localChatWindow ->
-                let
-                    chatUserHasGoodStanding chatUser =
-                        goodStandingPatterns
-                            |> List.any
-                                (\goodStandingPattern ->
-                                    chatUser.standingIconHint
-                                        |> Maybe.map (stringContainsIgnoringCase goodStandingPattern)
-                                        |> Maybe.withDefault False
-                                )
+            else
+                case context.readingFromGameClient |> localChatWindowFromUserInterface of
+                    Nothing ->
+                        Just (describeBranch "I don't see the local chat window." askForHelpToGetUnstuck)
 
-                    subsetOfUsersWithNoGoodStanding =
-                        localChatWindow.userlist
-                            |> Maybe.map .visibleUsers
-                            |> Maybe.withDefault []
-                            |> List.filter (chatUserHasGoodStanding >> not)
-                in
-                if 1 < (subsetOfUsersWithNoGoodStanding |> List.length) then
-                    Just (describeBranch "There is an enemy or neutral in local chat." config.ifShouldHide)
+                    Just localChatWindow ->
+                        let
+                            chatUserHasGoodStanding chatUser =
+                                goodStandingPatterns
+                                    |> List.any
+                                        (\goodStandingPattern ->
+                                            chatUser.standingIconHint
+                                                |> Maybe.map (stringContainsIgnoringCase goodStandingPattern)
+                                                |> Maybe.withDefault False
+                                        )
 
-                else
-                    Nothing
+                            subsetOfUsersWithNoGoodStanding =
+                                localChatWindow.userlist
+                                    |> Maybe.map .visibleUsers
+                                    |> Maybe.withDefault []
+                                    |> List.filter (chatUserHasGoodStanding >> not)
+                        in
+                        if 1 < (subsetOfUsersWithNoGoodStanding |> List.length) then
+                            Just (describeBranch "There is an enemy or neutral in local chat." config.ifShouldHide)
+
+                        else
+                            Nothing
 
 
 shouldHideWhenNeutralInLocal : BotDecisionContext -> Bool
@@ -1043,15 +1052,15 @@ dockToStationOrStructureWithMatchingName { prioritizeStructures, nameFromSetting
                 >> String.contains (nameFromSettingOrInfoPanel |> simplifyStationOrStructureNameFromSettingsBeforeComparingToMenuEntry)
 
         matchingOverviewEntry =
-            context.readingFromGameClient.overviewWindow
-                |> Maybe.map .entries
-                |> Maybe.withDefault []
+            context.readingFromGameClient.overviewWindows
+                |> List.concatMap .entries
                 |> List.filter (.objectName >> Maybe.map displayTextRepresentsMatchingStation >> Maybe.withDefault False)
                 |> List.head
 
         overviewWindowScrollControls =
-            context.readingFromGameClient.overviewWindow
-                |> Maybe.andThen .scrollControls
+            context.readingFromGameClient.overviewWindows
+                |> List.filterMap .scrollControls
+                |> List.head
     in
     matchingOverviewEntry
         |> Maybe.map
@@ -1160,7 +1169,7 @@ warpToMiningSiteOrWatchlistEntry context =
         Nothing ->
             useContextMenuCascadeOnListSurroundingsButton
                 (useMenuEntryWithTextContaining "asteroid belts"
-                    (useRandomMenuEntry
+                    (useRandomMenuEntry (context.randomIntegers |> List.head |> Maybe.withDefault 0)
                         (useMenuEntryWithTextContaining "Warp to Within"
                             (useMenuEntryWithTextContaining "Within 0 m" menuCascadeCompleted)
                         )
@@ -1220,7 +1229,7 @@ dockToRandomStationOrStructure context =
     dockToStationOrStructureUsingSurroundingsButtonMenu
         { prioritizeStructures = False
         , describeChoice = "Pick random station"
-        , chooseEntry = listElementAtWrappedIndex (getEntropyIntFromReadingFromGameClient context.readingFromGameClient)
+        , chooseEntry = listElementAtWrappedIndex (context.randomIntegers |> List.head |> Maybe.withDefault 0)
         }
         context
 
@@ -1712,8 +1721,12 @@ clickModuleButtonButWaitIfClickedInPreviousStep context moduleButton =
 ensureUserEnabledNameColumnInOverview : { ifEnabled : DecisionPathNode, ifDisabled : DecisionPathNode } -> SeeUndockingComplete -> DecisionPathNode
 ensureUserEnabledNameColumnInOverview { ifEnabled, ifDisabled } seeUndockingComplete =
     if
-        (seeUndockingComplete.overviewWindow.entries |> List.all (.objectName >> (==) Nothing))
-            && (0 < List.length seeUndockingComplete.overviewWindow.entries)
+        seeUndockingComplete.overviewWindows
+            |> List.any
+                (\overviewWindow ->
+                    (overviewWindow.entries |> List.all (.objectName >> (==) Nothing))
+                        && (0 < List.length overviewWindow.entries)
+                )
     then
         describeBranch "The 'Name' column in the overview window seems disabled." ifDisabled
 
@@ -1753,9 +1766,9 @@ asteroidOverviewEntryMatchesSettings settings overviewEntry =
 
 overviewWindowEntriesRepresentingAsteroids : ReadingFromGameClient -> List OverviewWindowEntry
 overviewWindowEntriesRepresentingAsteroids =
-    .overviewWindow
-        >> Maybe.map (.entries >> List.filter overviewWindowEntryRepresentsAnAsteroid)
-        >> Maybe.withDefault []
+    .overviewWindows
+        >> List.map (.entries >> List.filter overviewWindowEntryRepresentsAnAsteroid)
+        >> List.concat
 
 
 overviewWindowEntryRepresentsAnAsteroid : OverviewWindowEntry -> Bool
@@ -1832,7 +1845,7 @@ selectedContainerFirstItemFromInventoryWindow =
             (\itemsView ->
                 case itemsView of
                     EveOnline.ParseUserInterface.InventoryItemsListView { items } ->
-                        items
+                        items |> List.map .uiNode
 
                     EveOnline.ParseUserInterface.InventoryItemsNotListView { items } ->
                         items
@@ -1900,3 +1913,12 @@ containsSelectionIndicatorPhotonUI =
                                )
                    )
             )
+
+
+nothingFromIntIfGreaterThan : Int -> Int -> Maybe Int
+nothingFromIntIfGreaterThan limit originalInt =
+    if limit < originalInt then
+        Nothing
+
+    else
+        Just originalInt
