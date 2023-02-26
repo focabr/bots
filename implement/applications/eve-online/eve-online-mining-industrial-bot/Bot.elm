@@ -53,13 +53,11 @@
 {-
    TODO:  eve-online-mining-industrial
    - Inactivate 'activate-module-always' before docking.
-   - secondsToSessionEnd, not sending the ship to dock
    - Create a function to enable the compression module and then select all the ores in the mining hold and compress them, execute this whenever you reach the limit of 80% of the mining hold, check if you have fuel beforehand and if the compression parameter is enabled.
    - Study a way that the bot can detect the types of drones (attack or mine). If he detects the rats, return the mining drones to the drone bay and launch attack drones to kill the rats, then launch mine drones to return to mining.
 
 
    TODO: eve-online-mining
-    - secondsToSessionEnd, not sending the ship to dock
     - Open fleet hangar with open watchlist windows when ships are orca, porpoise
     - Pilot approach with open watch list windows
     - detect with fleet hangar < 2500 before moving ore to fleet hangar
@@ -512,7 +510,7 @@ dockedWithFleetHangarSelected context inventoryWindowWithFleetHangarSelected =
             describeBranch "I do not see the item hangar in the inventory." askForHelpToGetUnstuck
 
         Just itemHangar ->
-            shouldStackAllSelectedContainerWithDuplicateItems inventoryWindowWithFleetHangarSelected
+            shouldStackAllItemsWhenDuplicatedInInventory inventoryWindowWithFleetHangarSelected
                 |> Maybe.withDefault
                     (case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
                         Nothing ->
@@ -544,7 +542,7 @@ dockedWithMiningHoldSelected context inventoryWindowWithMiningHoldSelected =
             describeBranch "I do not see the item hangar in the inventory." askForHelpToGetUnstuck
 
         Just itemHangar ->
-            shouldStackAllSelectedContainerWithDuplicateItems inventoryWindowWithMiningHoldSelected
+            shouldStackAllItemsWhenDuplicatedInInventory inventoryWindowWithMiningHoldSelected
                 |> Maybe.withDefault
                     (case inventoryWindowWithMiningHoldSelected |> selectedContainerFirstItemFromInventoryWindow of
                         Nothing ->
@@ -600,7 +598,7 @@ inSpaceWithFleetHangarSelectedMoveToMiningHold _ inventoryWindowWithFleetHangarS
                     describeBranch "I do not see the fleet hangar in the inventory." askForHelpToGetUnstuck
 
                 Just miningHoldFromInventory ->
-                    shouldStackAllSelectedContainerWithDuplicateItems inventoryWindowWithFleetHangarSelected
+                    shouldStackAllItemsWhenDuplicatedInInventory inventoryWindowWithFleetHangarSelected
                         |> Maybe.withDefault
                             (case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
                                 Nothing ->
@@ -1852,8 +1850,8 @@ selectedContainerFirstItemFromInventoryWindow =
         >> Maybe.andThen List.head
 
 
-selectedContainerGetAllItemsFromInventoryWindow : EveOnline.ParseUserInterface.InventoryWindow -> Maybe (List String)
-selectedContainerGetAllItemsFromInventoryWindow =
+selectedContainerGetItemsNameFromInventoryWindow : EveOnline.ParseUserInterface.InventoryWindow -> Maybe (List String)
+selectedContainerGetItemsNameFromInventoryWindow =
     .selectedContainerInventory
         >> Maybe.andThen .itemsView
         >> Maybe.map
@@ -1879,27 +1877,30 @@ selectedContainerGetAllItemsFromInventoryWindow =
             )
 
 
-shouldStackAllSelectedContainerWithDuplicateItems : EveOnline.ParseUserInterface.InventoryWindow -> Maybe DecisionPathNode
-shouldStackAllSelectedContainerWithDuplicateItems selectedContainerFromInventoryWindow =
-    case selectedContainerFromInventoryWindow |> selectedContainerGetAllItemsFromInventoryWindow of
+shouldStackAllItemsWhenDuplicatedInInventory : EveOnline.ParseUserInterface.InventoryWindow -> Maybe DecisionPathNode
+shouldStackAllItemsWhenDuplicatedInInventory selectedContainerFromInventoryWindow =
+    case selectedContainerFromInventoryWindow |> selectedContainerGetItemsNameFromInventoryWindow of
         Nothing ->
             Nothing
 
-        Just allItemsFromInventory ->
-            if (allItemsFromInventory |> List.length) == (allItemsFromInventory |> EveOnline.ParseUserInterface.listUnique |> List.length) then
+        Just itemsNameFromInventory ->
+            if
+                (itemsNameFromInventory |> List.length)
+                    == (itemsNameFromInventory |> EveOnline.ParseUserInterface.listUnique |> List.length)
+            then
                 Nothing
 
             else
                 case selectedContainerFromInventoryWindow.buttonToStackAll of
                     Nothing ->
                         Just
-                            (describeBranch "I do not see the button to Stack All Items in the inventory."
+                            (describeBranch "I do not see the button to Stack All Items in the inventory selected."
                                 askForHelpToGetUnstuck
                             )
 
                     Just btnToStackAll ->
                         Just
-                            (describeBranch "I see item with same name, click the button Stack All in the inventory."
+                            (describeBranch "I see items in inventory selected with same name, clicking the button Stack All."
                                 (decideActionForCurrentStep
                                     (mouseClickOnUIElement MouseButtonLeft btnToStackAll)
                                 )
