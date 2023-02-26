@@ -512,26 +512,29 @@ dockedWithFleetHangarSelected context inventoryWindowWithFleetHangarSelected =
             describeBranch "I do not see the item hangar in the inventory." askForHelpToGetUnstuck
 
         Just itemHangar ->
-            case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
-                Nothing ->
-                    describeBranch "I see no item in the fleet hangar. Check if we unload the mining hold."
-                        (ensureMiningHoldIsSelectedInInventoryWindow
-                            context.readingFromGameClient
-                            (dockedWithMiningHoldSelected context)
-                        )
-
-                Just itemInInventory ->
-                    describeBranch "I see at least one item in the fleet hangar. Move this to the item hangar."
-                        (describeBranch "Drag and drop."
-                            (decideActionForCurrentStep
-                                (EffectOnWindow.effectsForDragAndDrop
-                                    { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
-                                    , endLocation = itemHangar.totalDisplayRegionVisible |> centerFromDisplayRegion
-                                    , mouseButton = MouseButtonLeft
-                                    }
+            shouldStackAllSelectedContainerWithDuplicateItems inventoryWindowWithFleetHangarSelected
+                |> Maybe.withDefault
+                    (case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
+                        Nothing ->
+                            describeBranch "I see no item in the fleet hangar. Check if we unload the mining hold."
+                                (ensureMiningHoldIsSelectedInInventoryWindow
+                                    context.readingFromGameClient
+                                    (dockedWithMiningHoldSelected context)
                                 )
-                            )
-                        )
+
+                        Just itemInInventory ->
+                            describeBranch "I see at least one item in the fleet hangar. Move this to the item hangar."
+                                (describeBranch "Drag and drop."
+                                    (decideActionForCurrentStep
+                                        (EffectOnWindow.effectsForDragAndDrop
+                                            { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                            , endLocation = itemHangar.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                            , mouseButton = MouseButtonLeft
+                                            }
+                                        )
+                                    )
+                                )
+                    )
 
 
 dockedWithMiningHoldSelected : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
@@ -541,45 +544,48 @@ dockedWithMiningHoldSelected context inventoryWindowWithMiningHoldSelected =
             describeBranch "I do not see the item hangar in the inventory." askForHelpToGetUnstuck
 
         Just itemHangar ->
-            case inventoryWindowWithMiningHoldSelected |> selectedContainerFirstItemFromInventoryWindow of
-                Nothing ->
-                    describeBranch "I see no item in the mining hold. Check if we should undock."
-                        (if
-                            shouldDockWhenWithoutDrones context
-                                && shouldDockBecauseDroneWindowWasInvisibleTooLong context.memory
-                         then
-                            describeBranch "Stay docked because I didn't see the drone window. Are we out of drones?"
-                                askForHelpToGetUnstuck
+            shouldStackAllSelectedContainerWithDuplicateItems inventoryWindowWithMiningHoldSelected
+                |> Maybe.withDefault
+                    (case inventoryWindowWithMiningHoldSelected |> selectedContainerFirstItemFromInventoryWindow of
+                        Nothing ->
+                            describeBranch "I see no item in the mining hold. Check if we should undock."
+                                (if
+                                    shouldDockWhenWithoutDrones context
+                                        && shouldDockBecauseDroneWindowWasInvisibleTooLong context.memory
+                                 then
+                                    describeBranch "Stay docked because I didn't see the drone window. Are we out of drones?"
+                                        askForHelpToGetUnstuck
 
-                         else
-                            continueIfShouldHide
-                                { ifShouldHide =
-                                    describeBranch "Stay docked because we should hide." waitForProgressInGame
-                                }
-                                context
-                                |> Maybe.withDefault
-                                    (undockUsingStationWindow context
-                                        { ifCannotReachButton =
-                                            describeBranch "Undock using context menu"
-                                                (undockUsingContextMenu context
-                                                    { inventoryWindowWithMiningHoldSelected = inventoryWindowWithMiningHoldSelected }
-                                                )
+                                 else
+                                    continueIfShouldHide
+                                        { ifShouldHide =
+                                            describeBranch "Stay docked because we should hide." waitForProgressInGame
                                         }
-                                    )
-                        )
-
-                Just itemInInventory ->
-                    describeBranch "I see at least one item in the mining hold. Move this to the item hangar."
-                        (describeBranch "Drag and drop."
-                            (decideActionForCurrentStep
-                                (EffectOnWindow.effectsForDragAndDrop
-                                    { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
-                                    , endLocation = itemHangar.totalDisplayRegionVisible |> centerFromDisplayRegion
-                                    , mouseButton = MouseButtonLeft
-                                    }
+                                        context
+                                        |> Maybe.withDefault
+                                            (undockUsingStationWindow context
+                                                { ifCannotReachButton =
+                                                    describeBranch "Undock using context menu"
+                                                        (undockUsingContextMenu context
+                                                            { inventoryWindowWithMiningHoldSelected = inventoryWindowWithMiningHoldSelected }
+                                                        )
+                                                }
+                                            )
                                 )
-                            )
-                        )
+
+                        Just itemInInventory ->
+                            describeBranch "I see at least one item in the mining hold. Move this to the item hangar."
+                                (describeBranch "Drag and drop."
+                                    (decideActionForCurrentStep
+                                        (EffectOnWindow.effectsForDragAndDrop
+                                            { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                            , endLocation = itemHangar.totalDisplayRegionVisible |> centerFromDisplayRegion
+                                            , mouseButton = MouseButtonLeft
+                                            }
+                                        )
+                                    )
+                                )
+                    )
 
 
 inSpaceWithFleetHangarSelectedMoveToMiningHold : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
@@ -594,26 +600,18 @@ inSpaceWithFleetHangarSelectedMoveToMiningHold _ inventoryWindowWithFleetHangarS
                     describeBranch "I do not see the fleet hangar in the inventory." askForHelpToGetUnstuck
 
                 Just miningHoldFromInventory ->
-                    case inventoryWindowWithFleetHangarSelected.buttonToStackAll of
-                        Nothing ->
-                            describeBranch "I do not see the button to Stack All Items in the inventory before the move this to the mining hold."
-                                askForHelpToGetUnstuck
-
-                        Just btnFleetHangarToStackAll ->
-                            case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
+                    shouldStackAllSelectedContainerWithDuplicateItems inventoryWindowWithFleetHangarSelected
+                        |> Maybe.withDefault
+                            (case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
                                 Nothing ->
-                                    describeBranch "I see no item in the fleet hangar."
-                                        (decideActionForCurrentStep
-                                            (mouseClickOnUIElement MouseButtonLeft btnFleetHangarToStackAll)
-                                        )
+                                    describeBranch "I see no item in the fleet hangar." askForHelpToGetUnstuck
 
                                 Just itemInInventory ->
-                                    describeBranch "I see at least one item in the fleet hangar. First Stack All."
+                                    describeBranch "I see at least one item in the fleet hangar."
                                         (describeBranch "Drag and drop."
                                             (describeBranch "click the tree entry representing the mining hold."
                                                 (decideActionForCurrentStep
-                                                    ([ mouseClickOnUIElement MouseButtonLeft btnFleetHangarToStackAll
-                                                     , EffectOnWindow.effectsForDragAndDrop
+                                                    ([ EffectOnWindow.effectsForDragAndDrop
                                                         { startLocation = itemInInventory.totalDisplayRegionVisible |> centerFromDisplayRegion
                                                         , endLocation = miningHoldFromInventory.uiNode.totalDisplayRegionVisible |> centerFromDisplayRegion
                                                         , mouseButton = MouseButtonLeft
@@ -625,6 +623,7 @@ inSpaceWithFleetHangarSelectedMoveToMiningHold _ inventoryWindowWithFleetHangarS
                                                 )
                                             )
                                         )
+                            )
 
 
 undockUsingStationWindow :
@@ -1851,6 +1850,60 @@ selectedContainerFirstItemFromInventoryWindow =
                         items
             )
         >> Maybe.andThen List.head
+
+
+selectedContainerGetAllItemsFromInventoryWindow : EveOnline.ParseUserInterface.InventoryWindow -> Maybe (List String)
+selectedContainerGetAllItemsFromInventoryWindow =
+    .selectedContainerInventory
+        >> Maybe.andThen .itemsView
+        >> Maybe.map
+            (\itemsView ->
+                case itemsView of
+                    EveOnline.ParseUserInterface.InventoryItemsListView { items } ->
+                        items
+                            |> List.map
+                                (.cellsTexts
+                                    >> Dict.get "Name"
+                                    >> Maybe.withDefault ""
+                                )
+
+                    EveOnline.ParseUserInterface.InventoryItemsNotListView { items } ->
+                        items
+                            |> List.filter (.uiNode >> .pythonObjectTypeName >> (==) "InvItem")
+                            |> List.filterMap
+                                (.uiNode
+                                    >> EveOnline.ParseUserInterface.getAllContainedDisplayTexts
+                                    >> List.reverse
+                                    >> List.head
+                                )
+            )
+
+
+shouldStackAllSelectedContainerWithDuplicateItems : EveOnline.ParseUserInterface.InventoryWindow -> Maybe DecisionPathNode
+shouldStackAllSelectedContainerWithDuplicateItems selectedContainerFromInventoryWindow =
+    case selectedContainerFromInventoryWindow |> selectedContainerGetAllItemsFromInventoryWindow of
+        Nothing ->
+            Nothing
+
+        Just allItemsFromInventory ->
+            if (allItemsFromInventory |> List.length) == (allItemsFromInventory |> EveOnline.ParseUserInterface.listUnique |> List.length) then
+                Nothing
+
+            else
+                case selectedContainerFromInventoryWindow.buttonToStackAll of
+                    Nothing ->
+                        Just
+                            (describeBranch "I do not see the button to Stack All Items in the inventory."
+                                askForHelpToGetUnstuck
+                            )
+
+                    Just btnToStackAll ->
+                        Just
+                            (describeBranch "I see item with same name, click the button Stack All in the inventory."
+                                (decideActionForCurrentStep
+                                    (mouseClickOnUIElement MouseButtonLeft btnToStackAll)
+                                )
+                            )
 
 
 miningHoldFromInventoryWindowShipEntry :
