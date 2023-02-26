@@ -74,6 +74,7 @@ type alias StepDecisionContext botSettings botMemory =
     , previousStepEffects : List Common.EffectOnWindow.EffectOnWindowStructure
     , previousReadingsFromGameClient : List ReadingFromGameClientMemory
     , contextMenuCascadeLevel : Int
+    , randomIntegers : List Int
     }
 
 
@@ -159,8 +160,14 @@ processEventInBaseFramework :
     -> ( BotState botMemory, EveOnline.BotFramework.BotEventResponse )
 processEventInBaseFramework config eventContext event stateBefore =
     case event of
-        EveOnline.BotFramework.ReadingFromGameClientCompleted readingFromGameClient screenshot ->
+        EveOnline.BotFramework.ReadingFromGameClientCompleted readingFromGameClientCompleted ->
             let
+                readingFromGameClient =
+                    readingFromGameClientCompleted.parsed
+
+                screenshot =
+                    readingFromGameClientCompleted.screenshot
+
                 updateMemoryContext =
                     { timeInMilliseconds = eventContext.timeInMilliseconds
                     , readingFromGameClient = readingFromGameClient
@@ -200,6 +207,7 @@ processEventInBaseFramework config eventContext event stateBefore =
                     , previousStepEffects = stateBefore.lastStepEffects
                     , previousReadingsFromGameClient = stateBefore.lastReadingsFromGameClient
                     , contextMenuCascadeLevel = contextMenuCascadeLevel
+                    , randomIntegers = readingFromGameClientCompleted.randomIntegers
                     }
 
                 ( decisionStagesDescriptions, decisionLeaf ) =
@@ -564,16 +572,16 @@ branchDependingOnDockedOrInSpace { ifDocked, ifSeeShipUI, ifUndockingComplete } 
         Just shipUI ->
             ifSeeShipUI shipUI
                 |> Maybe.withDefault
-                    (case readingFromGameClient.overviewWindow of
-                        Nothing ->
+                    (case readingFromGameClient.overviewWindows of
+                        [] ->
                             Common.DecisionPath.describeBranch
                                 "I see no overview window, wait until undocking completed."
                                 waitForProgressInGame
 
-                        Just overviewWindow ->
+                        overviewWindows ->
                             Common.DecisionPath.describeBranch "I see ship UI and overview, undocking complete."
                                 (ifUndockingComplete
-                                    { shipUI = shipUI, overviewWindow = overviewWindow }
+                                    { shipUI = shipUI, overviewWindows = overviewWindows }
                                 )
                     )
 

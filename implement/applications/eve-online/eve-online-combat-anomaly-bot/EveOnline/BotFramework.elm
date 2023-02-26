@@ -21,17 +21,15 @@ import Bitwise
 import BotLab.BotInterface_To_Host_2023_02_06 as InterfaceToHost
 import Common.Basics
 import Common.EffectOnWindow
-import Common.FNV
 import CompilationInterface.SourceFiles
 import Dict
 import EveOnline.MemoryReading
+import EveOnline.ParseGuiFromScreenshot
 import EveOnline.ParseUserInterface exposing (DisplayRegion, centerFromDisplayRegion, getAllContainedDisplayTextsWithRegion)
 import EveOnline.VolatileProcessInterface as VolatileProcessInterface
 import Json.Decode
-import Json.Encode
 import List.Extra
 import Maybe.Extra
-import Result.Extra
 import String.Extra
 
 
@@ -43,7 +41,14 @@ type alias BotConfiguration botSettings botState =
 
 
 type BotEvent
-    = ReadingFromGameClientCompleted EveOnline.ParseUserInterface.ParsedUserInterface ReadingFromGameClientScreenshot
+    = ReadingFromGameClientCompleted ReadingFromGameClientCompletedStruct
+
+
+type alias ReadingFromGameClientCompletedStruct =
+    { parsed : EveOnline.ParseUserInterface.ParsedUserInterface
+    , screenshot : ReadingFromGameClientScreenshot
+    , randomIntegers : List Int
+    }
 
 
 type BotEventResponse
@@ -119,6 +124,7 @@ type alias SetupState =
     , searchUIRootAddressResult : Maybe VolatileProcessInterface.SearchUIRootAddressResultStructure
     , lastReadingFromGame : Maybe { timeInMilliseconds : Int, stage : ReadingFromGameState }
     , lastEffectFailedToAcquireInputFocus : Maybe String
+    , randomIntegers : List Int
     }
 
 
@@ -197,18 +203,16 @@ type alias UITreeNodeWithDisplayRegion =
 
 type alias SeeUndockingComplete =
     { shipUI : EveOnline.ParseUserInterface.ShipUI
-    , overviewWindow : EveOnline.ParseUserInterface.OverviewWindow
+    , overviewWindows : List EveOnline.ParseUserInterface.OverviewWindow
     }
 
 
 type alias ReadingFromGameClientScreenshot =
-    { pixels_1x1 : ( Int, Int ) -> Maybe PixelValueRGB
-    , pixels_2x2 : ( Int, Int ) -> Maybe PixelValueRGB
-    }
+    EveOnline.ParseGuiFromScreenshot.ReadingFromGameClientScreenshot
 
 
 type alias PixelValueRGB =
-    { red : Int, green : Int, blue : Int }
+    EveOnline.ParseGuiFromScreenshot.PixelValueRGB
 
 
 type alias ReadingFromGameClientStructure =
@@ -317,18 +321,6 @@ getModuleButtonIdentifierInMemory =
     .uiNode >> .uiNode >> .pythonObjectAddress
 
 
-initSetup : SetupState
-initSetup =
-    { createVolatileProcessResult = Nothing
-    , requestsToVolatileProcessCount = 0
-    , lastRequestToVolatileProcessResult = Nothing
-    , gameClientProcesses = Nothing
-    , searchUIRootAddressResult = Nothing
-    , lastReadingFromGame = Nothing
-    , lastEffectFailedToAcquireInputFocus = Nothing
-    }
-
-
 initState : botState -> StateIncludingFramework botSettings botState
 initState botState =
     { setup = initSetup
@@ -341,6 +333,19 @@ initState botState =
     , waitingForSetupTasks = []
     , botSettings = Nothing
     , sessionTimeLimitInMilliseconds = Nothing
+    }
+
+
+initSetup : SetupState
+initSetup =
+    { createVolatileProcessResult = Nothing
+    , requestsToVolatileProcessCount = 0
+    , lastRequestToVolatileProcessResult = Nothing
+    , gameClientProcesses = Nothing
+    , searchUIRootAddressResult = Nothing
+    , lastReadingFromGame = Nothing
+    , lastEffectFailedToAcquireInputFocus = Nothing
+    , randomIntegers = []
     }
 
 
@@ -360,6 +365,9 @@ processEvent botConfiguration fromHostEvent stateBefore =
 
         InternalContinueSession continueSession ->
             let
+                setupStateBefore =
+                    state.setup
+
                 startTasksWithOrigin =
                     continueSession.startTasks
                         |> List.indexedMap
@@ -376,9 +384,6 @@ processEvent botConfiguration fromHostEvent stateBefore =
 
                 startsReading =
                     List.any (.taskType >> (==) (Just StartsReadingTaskType)) continueSession.startTasks
-
-                setupStateBefore =
-                    state.setup
 
                 setupState =
                     if startsReading then
@@ -544,6 +549,17 @@ processEventAfterIntegrateEvent botConfiguration stateBefore =
         notifyWhenArrivedAtTimeUpperBound =
             stateBefore.timeInMilliseconds + 2000
 
+        startTasksGetRandom =
+            if 100 < List.length state.setup.randomIntegers then
+                []
+
+            else
+                [ { areaId = "get-entropy"
+                  , taskType = Nothing
+                  , task = InterfaceToHost.RandomBytesRequest 300
+                  }
+                ]
+
         response =
             case responseBeforeAddingStatusMessage of
                 InternalContinueSession continueSession ->
@@ -558,6 +574,7 @@ processEventAfterIntegrateEvent botConfiguration stateBefore =
                                             |> Maybe.withDefault notifyWhenArrivedAtTimeUpperBound
                                             |> min notifyWhenArrivedAtTimeUpperBound
                                     }
+                            , startTasks = continueSession.startTasks ++ startTasksGetRandom
                         }
 
                 InternalFinishSession finishSession ->
@@ -721,7 +738,10 @@ operateBotExceptRenewingVolatileProcess botConfiguration botEventContext stateBe
                     }
 
                 ( parsedUserInterface, statusTextAdditionFromParseFromScreenshot ) =
-                    case parseUserInterfaceFromScreenshot screenshot readingFromGameClient.parsedMemoryReading of
+                    case
+                        readingFromGameClient.parsedMemoryReading
+                            |> EveOnline.ParseGuiFromScreenshot.parseUserInterfaceFromScreenshot screenshot
+                    of
                         Ok parsed ->
                             ( parsed, [] )
 
@@ -730,11 +750,18 @@ operateBotExceptRenewingVolatileProcess botConfiguration botEventContext stateBe
                             , [ "Failed to parse user interface: " ++ parseErr ]
                             )
 
+                setupStateBefore =
+                    stateBefore.setup
+
                 botStateBefore =
                     stateBefore.botState
 
                 botEvent =
-                    ReadingFromGameClientCompleted parsedUserInterface screenshot
+                    ReadingFromGameClientCompleted
+                        { parsed = parsedUserInterface
+                        , screenshot = screenshot
+                        , randomIntegers = setupStateBefore.randomIntegers
+                        }
 
                 ( newBotState, botEventResponse ) =
                     botStateBefore.botState
@@ -790,9 +817,6 @@ operateBotExceptRenewingVolatileProcess botConfiguration botEventContext stateBe
                             }
                                 |> InternalContinueSession
 
-                setupStateBefore =
-                    stateBefore.setup
-
                 setup =
                     { setupStateBefore
                         | lastReadingFromGame =
@@ -801,6 +825,7 @@ operateBotExceptRenewingVolatileProcess botConfiguration botEventContext stateBe
                                     (\lastReadingFromGame ->
                                         { lastReadingFromGame | stage = ReadingFromGameCompleted }
                                     )
+                        , randomIntegers = List.drop 1 setupStateBefore.randomIntegers
                     }
 
                 state =
@@ -987,11 +1012,24 @@ integrateTaskResult ( timeInMilliseconds, taskResult ) setupStateBefore =
                 _ ->
                     setupStateBefore
 
-        InterfaceToHost.RandomBytesResponse _ ->
-            setupStateBefore
+        InterfaceToHost.RandomBytesResponse randomBytes ->
+            { setupStateBefore
+                | randomIntegers = setupStateBefore.randomIntegers ++ randomIntegersFromRandomBytes randomBytes
+            }
 
         InterfaceToHost.CompleteWithoutResult ->
             setupStateBefore
+
+
+randomIntegersFromRandomBytes : List Int -> List Int
+randomIntegersFromRandomBytes bytes =
+    case bytes of
+        a :: b :: c :: d :: e :: f :: remaining ->
+            ((((((a - 127) * 255 + b) * 255 + c) * 255 + d) * 255 + e) * 255 + f)
+                :: randomIntegersFromRandomBytes remaining
+
+        _ ->
+            []
 
 
 integrateResponseFromVolatileProcess :
@@ -1483,48 +1521,6 @@ unpackContextMenuTreeToListOfActionsDependingOnReadings treeNode =
                 following
 
 
-getEntropyIntFromReadingFromGameClient : EveOnline.ParseUserInterface.ParsedUserInterface -> Int
-getEntropyIntFromReadingFromGameClient readingFromGameClient =
-    let
-        entropyFromString =
-            Common.FNV.hashString
-
-        entropyFromUiElement uiElement =
-            [ uiElement.uiNode.pythonObjectAddress |> entropyFromString
-            , uiElement.totalDisplayRegion.x
-            , uiElement.totalDisplayRegion.y
-            , uiElement.totalDisplayRegion.width
-            , uiElement.totalDisplayRegion.height
-            ]
-
-        entropyFromOverviewEntry overviewEntry =
-            (overviewEntry.cellsTexts |> Dict.values |> List.map entropyFromString)
-                ++ (overviewEntry.uiNode |> entropyFromUiElement)
-
-        entropyFromProbeScanResult probeScanResult =
-            [ probeScanResult.uiNode |> entropyFromUiElement, probeScanResult.textsLeftToRight |> List.map entropyFromString ]
-                |> List.concat
-
-        fromMenus =
-            readingFromGameClient.contextMenus
-                |> List.concatMap (.entries >> List.map .uiNode)
-                |> List.concatMap entropyFromUiElement
-
-        fromOverview =
-            readingFromGameClient.overviewWindow
-                |> Maybe.map .entries
-                |> Maybe.withDefault []
-                |> List.concatMap entropyFromOverviewEntry
-
-        fromProbeScanner =
-            readingFromGameClient.probeScannerWindow
-                |> Maybe.map .scanResults
-                |> Maybe.withDefault []
-                |> List.concatMap entropyFromProbeScanResult
-    in
-    (fromMenus ++ fromOverview ++ fromProbeScanner) |> List.sum
-
-
 secondsToSessionEnd : BotEventContext a -> Maybe Int
 secondsToSessionEnd botEventContext =
     botEventContext.sessionTimeLimitInMilliseconds
@@ -1598,15 +1594,15 @@ useMenuEntryInLastContextMenuInCascade choice =
         }
 
 
-useRandomMenuEntry : UseContextMenuCascadeNode -> UseContextMenuCascadeNode
-useRandomMenuEntry =
+useRandomMenuEntry : Int -> UseContextMenuCascadeNode -> UseContextMenuCascadeNode
+useRandomMenuEntry randomInt =
     MenuEntryWithCustomChoice
         { describeChoice = "random entry"
         , chooseEntry =
             \readingFromGameClient ->
                 readingFromGameClient
                     |> pickEntryFromLastContextMenuInCascade
-                        (Common.Basics.listElementAtWrappedIndex (getEntropyIntFromReadingFromGameClient readingFromGameClient))
+                        (Common.Basics.listElementAtWrappedIndex randomInt)
         }
 
 
@@ -1766,230 +1762,6 @@ growRegionOnAllSides growthAmount region =
     , width = region.width + growthAmount * 2
     , height = region.height + growthAmount * 2
     }
-
-
-parseUserInterfaceFromScreenshot :
-    ReadingFromGameClientScreenshot
-    -> EveOnline.ParseUserInterface.ParsedUserInterface
-    -> Result String EveOnline.ParseUserInterface.ParsedUserInterface
-parseUserInterfaceFromScreenshot screenshot original =
-    original.messageBoxes
-        |> List.map (parseUserInterfaceFromScreenshotMessageBox screenshot)
-        |> Result.Extra.combine
-        |> Result.map (\messageBoxes -> { original | messageBoxes = messageBoxes })
-
-
-parseUserInterfaceFromScreenshotMessageBox :
-    ReadingFromGameClientScreenshot
-    -> EveOnline.ParseUserInterface.MessageBox
-    -> Result String EveOnline.ParseUserInterface.MessageBox
-parseUserInterfaceFromScreenshotMessageBox screenshot messageBox =
-    let
-        colorSum color =
-            color.red + color.green + color.blue
-
-        colorDifferenceSum colorA colorB =
-            [ colorA.red - colorB.red
-            , colorA.green - colorB.green
-            , colorA.blue - colorB.blue
-            ]
-                |> List.map abs
-                |> List.sum
-
-        {- Based on this sample:
-           data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAUCAYAAACXtf2DAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAANWSURBVEhL1VVbb0xRFP7OHL3QzqheZjQtdUsZqhfNSAdhVKlrxJSIS0hFJEiQeJWI+AU8STzwIBGijRDSoiEpIcSgrom4PajeVAztGMwZa619zpnpqL77zux99uX71tpn773WaOXLG+IQxOkZHho9jI6WJmkozUj8RO2QmhBnCReDhFyow31l5W9T1rDNT9Iks8kBDdKTnjYKR/ftwv5tG+GvmIWDjZvhzMzAod07YJA4WcZ8/q1cOA97NjXg8N6dmODJR8PSADbU18JX5hUWw/6C8fm5ePT8JZpabsBDbV7NptX1OHXhInETxi2wE++0STh2+gzCAwMwYjEUe9woGDcW90JPbJbtQEGtTCY0Byq8pRiMRKhHz3BOeMjk83yFdzoi0ai0re2yHfyI/kKh241xOS7ZknjcwJHjJ7Bl7SqTMRR88D+iP1Fc6IEzKwuaQ8Pltlu01WmYMqHYZIkDdUe6P/fj2eu3NFmE9gch3Al1oLO3Dw+fvyIDY4ihbgVDWlQ1tbbBP6cS19vvIvx9AC/evMO5K9dQQFts8c1rSiumDq+abwN3eEUyGqcFUJufp63NoipfHpTdEV2MNNTiCRnTqEUNh0NtDtWKytBoUqMJTecPozadgzLOSPCGgPlszHwrG5a7f2j+KwxJFf+G2qTUVDEylEadBIHpUlhqyq1i1amQeaqG1yiIA3VbgICvGmvrFiLX5aR0UQbjdwy1NT5TkCzjOKHoz8vDuqWL4K8sgytrNLyTS1DkLkBpyUThMOxb5M7NwcypJXjz7gPmV88m0WxUzyxF3lgnXV1DOBZYwSW4LIDb90NY4vfBOToTMyZPxPZ1q9DV02NaTUoVmRnp+NTTiy/hb5Qm1P5tC67B2UtXxZqKlGTESZOBj93d+D4YgUExtCKwAKFnL9D/NaxWQJXtwDoUyw77eExRvFi2SDykwOQL4tJ7SZmgpqocOsUDa3gbbQddff2omuXF+pV16Or9LPZOnm/GYv9cM1UkwMbEIKWGA41b4crOliB739mJKzfbEaxfYrqnoLNTBbkzjJiEvprjVRgSzRz2/E5NFXw2nKZlqfTJPMaRzNB1nXuJQ2YCG3LQH49jFBcdOr8dRBSRyUsCpwTmCZ8M6tymt2gEwB+SX2kpOjZ/ywAAAABJRU5ErkJggg==
-        -}
-        matchesButtonTextOk buttonCenter =
-            let
-                colorFromRelativeLocation_binned ( fromCenterX, fromCenterY ) =
-                    screenshot.pixels_2x2 ( buttonCenter.x // 2 + fromCenterX, buttonCenter.y // 2 + fromCenterY )
-                        |> Maybe.withDefault { red = 0, green = 0, blue = 0 }
-
-                ( darkestOffsetX, darkestOffsetY ) =
-                    [ ( 0, 0 ), ( -1, 0 ), ( -2, 0 ), ( 0, 1 ), ( -1, 1 ), ( -2, 1 ) ]
-                        |> List.sortBy (colorFromRelativeLocation_binned >> colorSum)
-                        |> List.head
-                        |> Maybe.withDefault ( 0, 0 )
-
-                edgeThreshold =
-                    20
-
-                colorsAndEdges =
-                    List.range -3 2
-                        |> List.map
-                            (\index ->
-                                let
-                                    leftColor =
-                                        colorFromRelativeLocation_binned
-                                            ( darkestOffsetX + index, darkestOffsetY )
-
-                                    rightColor =
-                                        colorFromRelativeLocation_binned
-                                            ( darkestOffsetX + index + 1, darkestOffsetY )
-                                in
-                                ( leftColor
-                                , ((colorSum rightColor - colorSum leftColor) // edgeThreshold)
-                                    |> min 1
-                                    |> max -1
-                                )
-                            )
-
-                edges =
-                    colorsAndEdges |> List.map Tuple.second
-            in
-            (List.drop 1 edges == [ 1, -1, 1, -1, 1 ])
-                || (List.take 5 edges == [ 1, 1, -1, 1, 1 ])
-
-        getTextFromButtonCenter buttonCenter =
-            [ ( matchesButtonTextOk, "OK" )
-            ]
-                |> List.Extra.find (Tuple.first >> (|>) buttonCenter)
-                |> Maybe.map Tuple.second
-    in
-    case messageBox.buttonGroup of
-        Nothing ->
-            Ok messageBox
-
-        Just buttonGroup ->
-            let
-                measureButtonEdgesY =
-                    buttonGroup.totalDisplayRegion.y + 6
-
-                measureButtonEdgesLeft_2 =
-                    buttonGroup.totalDisplayRegion.x // 2 - 1
-
-                measureButtonEdgesRight_2 =
-                    (measureButtonEdgesLeft_2 + buttonGroup.totalDisplayRegion.width // 2) + 1
-
-                getEdgeLinePixel x =
-                    screenshot.pixels_2x2 ( x, measureButtonEdgesY // 2 )
-            in
-            case
-                List.range measureButtonEdgesLeft_2 measureButtonEdgesRight_2
-                    |> List.map
-                        (\x ->
-                            case ( getEdgeLinePixel (x - 1), getEdgeLinePixel (x + 1) ) of
-                                ( Just leftPixel, Just rightPixel ) ->
-                                    Just (20 < colorDifferenceSum leftPixel rightPixel)
-
-                                _ ->
-                                    Nothing
-                        )
-                    |> Maybe.Extra.combine
-            of
-                Nothing ->
-                    Err
-                        ("Missing pixel data for button group at "
-                            ++ String.fromInt
-                                (buttonGroup.totalDisplayRegion.x + buttonGroup.totalDisplayRegion.width // 2)
-                            ++ ","
-                            ++ String.fromInt
-                                (buttonGroup.totalDisplayRegion.y + buttonGroup.totalDisplayRegion.height // 2)
-                        )
-
-                Just buttonEdgesBools_2 ->
-                    let
-                        fromImageButtonsRegions =
-                            buttonEdgesBools_2
-                                |> centersOfTrueSequences
-                                |> List.map ((+) measureButtonEdgesLeft_2)
-                                |> pairsFromList
-                                |> Tuple.first
-                                |> List.map
-                                    (\( left_binned, right_binned ) ->
-                                        { x = left_binned * 2
-                                        , y = buttonGroup.totalDisplayRegion.y
-                                        , width = (right_binned - left_binned) * 2
-                                        , height = buttonGroup.totalDisplayRegion.height
-                                        }
-                                    )
-
-                        displayRegionOverlapsWithExistingButton displayRegion =
-                            List.any
-                                (.uiNode >> .totalDisplayRegion >> regionAddMarginOnEachSide -2 >> EveOnline.ParseUserInterface.regionsOverlap displayRegion)
-                                messageBox.buttons
-
-                        fromImageButtons :
-                            List
-                                { uiNode : EveOnline.ParseUserInterface.UITreeNodeWithDisplayRegion
-                                , mainText : Maybe String
-                                }
-                        fromImageButtons =
-                            fromImageButtonsRegions
-                                |> List.filterMap
-                                    (\fromImageButtonRegion ->
-                                        if displayRegionOverlapsWithExistingButton fromImageButtonRegion then
-                                            Nothing
-
-                                        else
-                                            let
-                                                mainText =
-                                                    fromImageButtonRegion
-                                                        |> centerFromDisplayRegion
-                                                        |> getTextFromButtonCenter
-                                            in
-                                            Just
-                                                { uiNode =
-                                                    { uiNode =
-                                                        { originalJson = Json.Encode.null
-                                                        , pythonObjectAddress = buttonGroup.uiNode.pythonObjectAddress ++ "-button"
-                                                        , pythonObjectTypeName = "button-from-screenshot"
-                                                        , dictEntriesOfInterest = Dict.empty
-                                                        , children = Nothing
-                                                        }
-                                                    , totalDisplayRegion = fromImageButtonRegion
-                                                    , totalDisplayRegionVisible = fromImageButtonRegion
-                                                    , children = Nothing
-                                                    , selfDisplayRegion = fromImageButtonRegion
-                                                    }
-                                                , mainText = mainText
-                                                }
-                                    )
-                    in
-                    Ok
-                        { messageBox
-                            | buttons = messageBox.buttons ++ fromImageButtons
-                        }
-
-
-centersOfTrueSequences : List Bool -> List Int
-centersOfTrueSequences list =
-    (list ++ [ False ])
-        |> List.Extra.indexedFoldl
-            (\index currentBool aggregate ->
-                if currentBool then
-                    if aggregate.trueStartIndex == Nothing then
-                        { aggregate | trueStartIndex = Just index }
-
-                    else
-                        aggregate
-
-                else
-                    case aggregate.trueStartIndex of
-                        Nothing ->
-                            aggregate
-
-                        Just trueStartIndex ->
-                            { aggregate
-                                | edges = aggregate.edges ++ [ (trueStartIndex + index) // 2 ]
-                                , trueStartIndex = Nothing
-                            }
-            )
-            { edges = [], trueStartIndex = Nothing }
-        |> .edges
-
-
-pairsFromList : List a -> ( List ( a, a ), Maybe a )
-pairsFromList list =
-    case list of
-        [] ->
-            ( [], Nothing )
-
-        [ single ] ->
-            ( [], Just single )
-
-        first :: second :: remainder ->
-            pairsFromList remainder |> Tuple.mapFirst ((::) ( first, second ))
 
 
 regionAddMarginOnEachSide : Int -> DisplayRegion -> DisplayRegion

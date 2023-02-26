@@ -1,4 +1,4 @@
-{- EVE Online mining bot version 2023-02-13
+{- EVE Online mining bot version 2023-02-25
 
    The bot warps to an asteroid belt, mines there until the mining hold is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
    If no station name or structure name is given with the bot-settings, the bot docks again at the station where it was last docked.
@@ -60,7 +60,6 @@ import EveOnline.BotFramework
         , ShipModulesMemory
         , UIElement
         , doEffectsClickModuleButton
-        , getEntropyIntFromReadingFromGameClient
         , localChatWindowFromUserInterface
         , menuCascadeCompleted
         , mouseClickOnUIElement
@@ -807,15 +806,15 @@ dockToStationOrStructureWithMatchingName { prioritizeStructures, nameFromSetting
                 >> String.contains (nameFromSettingOrInfoPanel |> simplifyStationOrStructureNameFromSettingsBeforeComparingToMenuEntry)
 
         matchingOverviewEntry =
-            context.readingFromGameClient.overviewWindow
-                |> Maybe.map .entries
-                |> Maybe.withDefault []
+            context.readingFromGameClient.overviewWindows
+                |> List.concatMap .entries
                 |> List.filter (.objectName >> Maybe.map displayTextRepresentsMatchingStation >> Maybe.withDefault False)
                 |> List.head
 
         overviewWindowScrollControls =
-            context.readingFromGameClient.overviewWindow
-                |> Maybe.andThen .scrollControls
+            context.readingFromGameClient.overviewWindows
+                |> List.filterMap .scrollControls
+                |> List.head
     in
     matchingOverviewEntry
         |> Maybe.map
@@ -919,15 +918,16 @@ dockToStationOrStructureUsingSurroundingsButtonMenu { prioritizeStructures, desc
 
 
 warpToMiningSite : BotDecisionContext -> DecisionPathNode
-warpToMiningSite =
+warpToMiningSite context =
     useContextMenuCascadeOnListSurroundingsButton
         (useMenuEntryWithTextContaining "asteroid belts"
-            (useRandomMenuEntry
+            (useRandomMenuEntry (context.randomIntegers |> List.head |> Maybe.withDefault 0)
                 (useMenuEntryWithTextContaining "Warp to Within"
                     (useMenuEntryWithTextContaining "Within 0 m" menuCascadeCompleted)
                 )
             )
         )
+        context
 
 
 runAway : BotDecisionContext -> DecisionPathNode
@@ -966,7 +966,7 @@ dockToRandomStationOrStructure context =
     dockToStationOrStructureUsingSurroundingsButtonMenu
         { prioritizeStructures = False
         , describeChoice = "Pick random station"
-        , chooseEntry = listElementAtWrappedIndex (getEntropyIntFromReadingFromGameClient context.readingFromGameClient)
+        , chooseEntry = listElementAtWrappedIndex (context.randomIntegers |> List.head |> Maybe.withDefault 0)
         }
         context
 
@@ -1294,8 +1294,12 @@ clickModuleButtonButWaitIfClickedInPreviousStep context moduleButton =
 ensureUserEnabledNameColumnInOverview : { ifEnabled : DecisionPathNode, ifDisabled : DecisionPathNode } -> SeeUndockingComplete -> DecisionPathNode
 ensureUserEnabledNameColumnInOverview { ifEnabled, ifDisabled } seeUndockingComplete =
     if
-        (seeUndockingComplete.overviewWindow.entries |> List.all (.objectName >> (==) Nothing))
-            && (0 < List.length seeUndockingComplete.overviewWindow.entries)
+        seeUndockingComplete.overviewWindows
+            |> List.any
+                (\overviewWindow ->
+                    (overviewWindow.entries |> List.all (.objectName >> (==) Nothing))
+                        && (0 < List.length overviewWindow.entries)
+                )
     then
         describeBranch "The 'Name' column in the overview window seems disabled." ifDisabled
 
@@ -1335,9 +1339,9 @@ asteroidOverviewEntryMatchesSettings settings overviewEntry =
 
 overviewWindowEntriesRepresentingAsteroids : ReadingFromGameClient -> List OverviewWindowEntry
 overviewWindowEntriesRepresentingAsteroids =
-    .overviewWindow
-        >> Maybe.map (.entries >> List.filter overviewWindowEntryRepresentsAnAsteroid)
-        >> Maybe.withDefault []
+    .overviewWindows
+        >> List.map (.entries >> List.filter overviewWindowEntryRepresentsAnAsteroid)
+        >> List.concat
 
 
 overviewWindowEntryRepresentsAnAsteroid : OverviewWindowEntry -> Bool
@@ -1388,7 +1392,7 @@ selectedContainerFirstItemFromInventoryWindow =
             (\itemsView ->
                 case itemsView of
                     EveOnline.ParseUserInterface.InventoryItemsListView { items } ->
-                        items
+                        items |> List.map .uiNode
 
                     EveOnline.ParseUserInterface.InventoryItemsNotListView { items } ->
                         items

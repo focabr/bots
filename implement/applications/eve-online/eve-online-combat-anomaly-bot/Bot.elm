@@ -1,6 +1,6 @@
-{- EVE Online combat anomaly bot version 2023-02-13
+{- EVE Online combat anomaly bot version 2023-02-25
 
-   This bot uses the probe scanner to warp to combat anomalies and kills rats using drones and weapon modules.
+   This bot uses the probe scanner to find combat anomalies and kills rats using drones and weapon modules.
 
    ## Features
 
@@ -70,7 +70,6 @@ import EveOnline.BotFramework
         , ShipModulesMemory
         , UseContextMenuCascadeNode(..)
         , doEffectsClickModuleButton
-        , getEntropyIntFromReadingFromGameClient
         , localChatWindowFromUserInterface
         , menuCascadeCompleted
         , mouseClickOnUIElement
@@ -453,9 +452,9 @@ dockAtRandomStationOrStructure context =
                         [ withTextContainingIgnoringCase "dock"
                         , List.filter (.text >> stringContainsIgnoringCase "station")
                             >> Common.Basics.listElementAtWrappedIndex
-                                (getEntropyIntFromReadingFromGameClient context.readingFromGameClient)
+                                (context.randomIntegers |> List.head |> Maybe.withDefault 0)
                         , Common.Basics.listElementAtWrappedIndex
-                            (getEntropyIntFromReadingFromGameClient context.readingFromGameClient)
+                            (context.randomIntegers |> List.head |> Maybe.withDefault 0)
                         ]
                             |> List.filterMap (\priority -> suitableMenuEntries |> priority)
                             |> List.head
@@ -577,7 +576,8 @@ decideActionInAnomaly :
 decideActionInAnomaly { arrivalInAnomalyAgeSeconds } context seeUndockingComplete continueIfCombatComplete =
     let
         overviewEntriesToAttack =
-            seeUndockingComplete.overviewWindow.entries
+            seeUndockingComplete.overviewWindows
+                |> List.concatMap .entries
                 |> List.sortBy (.objectDistanceInMeters >> Result.withDefault 999999)
                 |> List.filter shouldAttackOverviewEntry
 
@@ -701,7 +701,7 @@ enterAnomaly { ifNoAcceptableAnomalyAvailable } context =
                 scanResultsWithReasonToIgnore
                     |> List.filter (Tuple.second >> (==) Nothing)
                     |> List.map Tuple.first
-                    |> listElementAtWrappedIndex (getEntropyIntFromReadingFromGameClient context.readingFromGameClient)
+                    |> listElementAtWrappedIndex (context.randomIntegers |> List.head |> Maybe.withDefault 0)
             of
                 Nothing ->
                     describeBranch
@@ -1124,9 +1124,8 @@ getNamesOfOtherPilotsInOverview readingFromGameClient =
             (overviewEntry.objectName |> Maybe.map (\objectName -> pilotNamesFromLocalChat |> List.member objectName))
                 |> Maybe.withDefault False
     in
-    readingFromGameClient.overviewWindow
-        |> Maybe.map .entries
-        |> Maybe.withDefault []
+    readingFromGameClient.overviewWindows
+        |> List.concatMap .entries
         |> List.filter overviewEntryRepresentsOtherPilot
         |> List.map (.objectName >> Maybe.withDefault "do not see name of overview entry")
 
@@ -1141,9 +1140,8 @@ getNamesOfRatsInOverview readingFromGameClient =
                         |> Result.withDefault False
                    )
     in
-    readingFromGameClient.overviewWindow
-        |> Maybe.map .entries
-        |> Maybe.withDefault []
+    readingFromGameClient.overviewWindows
+        |> List.concatMap .entries
         |> List.filter overviewEntryRepresentsRatOnGrid
         |> List.map (.objectName >> Maybe.withDefault "do not see name of overview entry")
 
