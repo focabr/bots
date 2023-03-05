@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-02-25
+{- EVE Online mining bot for industrial ship version 2023-03-04
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -33,6 +33,7 @@
    + `unload-fleet-hangar-percent` : This will make the bot to unload the fleet hangar at least 65% (default) into the mining hold.
    + `dock-when-without-drones` : This will make the bot dock when it is out of drones. The only supported values are `no` and `yes`.
    + `mining-using-drones` : This will make the bot lock an asteroid and send the drone them to mine. The only supported values are `no` and `yes`.
+   + `repair-before-undocking` : Repair the ship at the station before undocking. The only supported values are `no` and `yes`.
 
    When using more than one setting, start a new line for each setting in the text input field.
    Here is an example of a complete settings string:
@@ -51,16 +52,32 @@
    authors-forum-usernames:viir,focabr
 -}
 {-
-   TODO:  eve-online-mining-industrial
-   - Inactivate 'activate-module-always' before docking.
-   - Create a function to enable the compression module and then select all the ores in the mining hold and compress them, execute this whenever you reach the limit of 80% of the mining hold, check if you have fuel beforehand and if the compression parameter is enabled.
-   - Study a way that the bot can detect the types of drones (attack or mine). If he detects the rats, return the mining drones to the drone bay and launch attack drones to kill the rats, then launch mine drones to return to mining.
-
+    TODO:  eve-online-mining-industrial
+    - Inactivate 'activate-module-always' before docking.
+        - criar uma expressão regular para pegar os "Siege Modules, Command Burst, Compressors"
+        - desativar automaticamente todos os industrial comandos ele não dexar warp
+        - Desativar automaticamente todos os capital commandos ele não deixar docar
+        - Antes de acionar o industrial core verificar a quantidade de agua
+    - Create a function to enable the compression module and then select all the ores in the mining hold and compress them, execute this whenever you reach the limit of 80% of the mining hold, check if you have fuel beforehand and if the compression parameter is enabled.
+    - Study a way that the bot can detect the types of drones (attack or mine). If he detects the rats, return the mining drones to the drone bay and launch attack drones to kill the rats, then launch mine drones to return to mining.
+    - Incluir para warp to asteroid belt tbm pelo overview
+    - Add a setting 'mining-site-location' to support bookmarked location as mining site.
+    - Dock with Shutdown Cluster EVE Online
+    - Ajustar para que a mensagembox aceite o botao quit
 
    TODO: eve-online-mining
     - Open fleet hangar with open watchlist windows when ships are orca, porpoise
     - Pilot approach with open watch list windows
     - detect with fleet hangar < 2500 before moving ore to fleet hangar
+    - Incluir para warp to asteroid belt tbm pelo overview
+    - Add setting to avoid rats by Cerberus (não compativel com fleet)
+    - Add a setting 'mining-site-location' to support bookmarked location as mining site.
+    - Add support with warp to watchlist with visibled.
+    - Dock with Shutdown Cluster EVE Online
+    - Stop clico do modulo do miner em 50% +-
+    - Ajustar para que a mensagembox aceite o botao quit
+
+
 -}
 
 
@@ -131,6 +148,7 @@ defaultBotSettings =
     , hideWhenNeutralInLocal = Nothing
     , dockWhenWithoutDrones = Nothing
     , miningUsingDrones = Nothing
+    , repairBeforeUndocking = Nothing
     , targetingRange = 8000
     , miningModuleRange = 5000
     , botStepDelayMilliseconds = 1300
@@ -171,6 +189,10 @@ parseBotSettings =
          , ( "mining-using-drones"
            , AppSettings.valueTypeYesOrNo
                 (\mining settings -> { settings | miningUsingDrones = Just mining })
+           )
+         , ( "repair-before-undocking"
+           , AppSettings.valueTypeYesOrNo
+                (\repair settings -> { settings | repairBeforeUndocking = Just repair })
            )
          , ( "targeting-range"
            , AppSettings.valueTypeInteger (\range settings -> { settings | targetingRange = range })
@@ -216,6 +238,7 @@ type alias BotSettings =
     , hideWhenNeutralInLocal : Maybe AppSettings.YesOrNo
     , dockWhenWithoutDrones : Maybe AppSettings.YesOrNo
     , miningUsingDrones : Maybe AppSettings.YesOrNo
+    , repairBeforeUndocking : Maybe AppSettings.YesOrNo
     , targetingRange : Int
     , miningModuleRange : Int
     , botStepDelayMilliseconds : Int
@@ -406,28 +429,17 @@ shouldHideWhenNeutralInLocal context =
 
 shouldDockWhenWithoutDrones : BotDecisionContext -> Bool
 shouldDockWhenWithoutDrones context =
-    case context.eventContext.botSettings.dockWhenWithoutDrones of
-        Just AppSettings.No ->
-            False
-
-        Just AppSettings.Yes ->
-            True
-
-        Nothing ->
-            False
+    context.eventContext.botSettings.dockWhenWithoutDrones == Just AppSettings.Yes
 
 
 shouldMiningUsingDrones : BotDecisionContext -> Bool
 shouldMiningUsingDrones context =
-    case context.eventContext.botSettings.miningUsingDrones of
-        Just AppSettings.No ->
-            False
+    context.eventContext.botSettings.miningUsingDrones == Just AppSettings.Yes
 
-        Just AppSettings.Yes ->
-            True
 
-        Nothing ->
-            False
+shouldRepairBeforeUndocking : BotDecisionContext -> Bool
+shouldRepairBeforeUndocking context =
+    context.eventContext.botSettings.repairBeforeUndocking == Just AppSettings.Yes
 
 
 returnDronesAndRunAwayIfHitpointsAreTooLowOrWithoutDrones : BotDecisionContext -> EveOnline.ParseUserInterface.ShipUI -> Maybe DecisionPathNode
@@ -561,13 +573,16 @@ dockedWithMiningHoldSelected context inventoryWindowWithMiningHoldSelected =
                                         }
                                         context
                                         |> Maybe.withDefault
-                                            (undockUsingStationWindow context
-                                                { ifCannotReachButton =
-                                                    describeBranch "Undock using context menu"
-                                                        (undockUsingContextMenu context
-                                                            { inventoryWindowWithMiningHoldSelected = inventoryWindowWithMiningHoldSelected }
-                                                        )
-                                                }
+                                            (checkAndRepairBeforeUndockingUsingContextMenu context inventoryWindowWithMiningHoldSelected
+                                                |> Maybe.withDefault
+                                                    (undockUsingStationWindow context
+                                                        { ifCannotReachButton =
+                                                            describeBranch "Undock using context menu"
+                                                                (undockUsingContextMenu context
+                                                                    { inventoryWindowWithMiningHoldSelected = inventoryWindowWithMiningHoldSelected }
+                                                                )
+                                                        }
+                                                    )
                                             )
                                 )
 
@@ -664,6 +679,61 @@ undockUsingContextMenu context { inventoryWindowWithMiningHoldSelected } =
                 ( "active ship", activeShipEntry.uiNode )
                 (useMenuEntryWithTextContainingFirstOf [ "undock from station" ] menuCascadeCompleted)
                 context
+
+
+checkAndRepairBeforeUndockingUsingContextMenu : BotDecisionContext -> EveOnline.ParseUserInterface.InventoryWindow -> Maybe DecisionPathNode
+checkAndRepairBeforeUndockingUsingContextMenu context inventoryWindowWithMiningHoldSelected =
+    if not (context |> shouldRepairBeforeUndocking) then
+        Nothing
+
+    else
+        case context.readingFromGameClient.repairShopWindow of
+            Nothing ->
+                case inventoryWindowWithMiningHoldSelected |> activeShipTreeEntryFromInventoryWindow of
+                    Nothing ->
+                        Just (describeBranch "I do not see the active ship in the inventory window." askForHelpToGetUnstuck)
+
+                    Just activeShipEntry ->
+                        Just
+                            (useContextMenuCascade
+                                ( "active ship", activeShipEntry.uiNode )
+                                (useMenuEntryWithTextContaining "get repair quote" menuCascadeCompleted)
+                                context
+                            )
+
+            Just repairShopWindow ->
+                let
+                    buttonUsed =
+                        .mainText
+                            >> Maybe.map
+                                (String.trim
+                                    >> String.toLower
+                                    >> (\buttonText -> [ "repair all" ] |> List.member buttonText)
+                                )
+                            >> Maybe.withDefault False
+                in
+                case repairShopWindow.items |> List.head of
+                    Nothing ->
+                        Nothing
+
+                    Just itemsRepair ->
+                        Just
+                            (describeBranch "It has items to repair, selecting the first item."
+                                (case repairShopWindow.buttons |> List.filter buttonUsed |> List.head of
+                                    Just btnRepairAll ->
+                                        describeBranch "I see the repair all button, i'm going to click it."
+                                            (decideActionForCurrentStep
+                                                ([ mouseClickOnUIElement MouseButtonLeft itemsRepair
+                                                 , mouseClickOnUIElement MouseButtonLeft btnRepairAll.uiNode
+                                                 ]
+                                                    |> List.concat
+                                                )
+                                            )
+
+                                    Nothing ->
+                                        describeBranch "It has items to repair, but I do not see the repair all button." askForHelpToGetUnstuck
+                                )
+                            )
 
 
 inSpaceWithFleetHangarSelected : BotDecisionContext -> SeeUndockingComplete -> EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode
@@ -1192,11 +1262,6 @@ runAway =
 
 dockToUnloadOre : BotDecisionContext -> DecisionPathNode
 dockToUnloadOre context =
-    -- case context |> knownModulesToActivateAlways |> List.filter (Tuple.second >> moduleIsActiveOrReloading) |> List.head of
-    --     Just ( activeModuleMatchingText, activeModule ) ->
-    --         describeBranch ("I see active module '" ++ activeModuleMatchingText ++ "' to activate always. Inactivate it before docking.")
-    --             (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
-    --     Nothing ->
     case context.eventContext.botSettings.unloadStationName of
         Just unloadStationName ->
             dockToStationOrStructureWithMatchingName
@@ -1435,6 +1500,19 @@ returnDronesToBay context =
             )
 
 
+inactivateModuleBeforeDocking : BotDecisionContext -> Maybe DecisionPathNode
+inactivateModuleBeforeDocking context =
+    case context |> knownModulesToActivateAlways |> List.filter (Tuple.second >> moduleIsActiveOrReloading) |> List.head of
+        Just ( activeModuleMatchingText, activeModule ) ->
+            Just
+                (describeBranch ("I see active module '" ++ activeModuleMatchingText ++ "' to activate always. Inactivate it before docking.")
+                    (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
+                )
+
+        Nothing ->
+            Nothing
+
+
 readShipUIModuleButtonTooltips : BotDecisionContext -> Maybe DecisionPathNode
 readShipUIModuleButtonTooltips =
     EveOnline.BotFrameworkSeparatingMemory.readShipUIModuleButtonTooltipWhereNotYetInMemory
@@ -1472,6 +1550,22 @@ tooltipLooksLikeMiningModule =
         >> List.map Tuple.first
         >> List.any
             (Regex.fromString "\\d\\s*m3\\s*\\/\\s*s" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
+
+
+tooltipLooksLikeCompressorModule : ModuleButtonTooltipMemory -> Bool
+tooltipLooksLikeCompressorModule =
+    .allContainedDisplayTextsWithRegion
+        >> List.map Tuple.first
+        >> List.any
+            (Regex.fromString "\\s*Compressor\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
+
+
+tooltipLooksLikeIndustrialModule : ModuleButtonTooltipMemory -> Bool
+tooltipLooksLikeIndustrialModule =
+    .allContainedDisplayTextsWithRegion
+        >> List.map Tuple.first
+        >> List.any
+            (Regex.fromString "\\s*Industrial\\s*Core\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
 
 
 tooltipLooksLikeModuleToActivateAlways : BotDecisionContext -> ModuleButtonTooltipMemory -> Maybe String
