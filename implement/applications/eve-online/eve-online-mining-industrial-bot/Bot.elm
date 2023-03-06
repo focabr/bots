@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-03-04
+{- EVE Online mining bot for industrial ship version 2023-03-05
 
    The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -48,36 +48,8 @@
 
 -}
 {-
-   catalog-tags:eve-online,mining-industrial,orca,porpoise
+   catalog-tags:eve-online,mining-industrial,orca,porpoise,rorqual
    authors-forum-usernames:viir,focabr
--}
-{-
-    TODO:  eve-online-mining-industrial
-    - Inactivate 'activate-module-always' before docking.
-        - criar uma expressão regular para pegar os "Siege Modules, Command Burst, Compressors"
-        - desativar automaticamente todos os industrial comandos ele não dexar warp
-        - Desativar automaticamente todos os capital commandos ele não deixar docar
-        - Antes de acionar o industrial core verificar a quantidade de agua
-    - Create a function to enable the compression module and then select all the ores in the mining hold and compress them, execute this whenever you reach the limit of 80% of the mining hold, check if you have fuel beforehand and if the compression parameter is enabled.
-    - Study a way that the bot can detect the types of drones (attack or mine). If he detects the rats, return the mining drones to the drone bay and launch attack drones to kill the rats, then launch mine drones to return to mining.
-    - Incluir para warp to asteroid belt tbm pelo overview
-    - Add a setting 'mining-site-location' to support bookmarked location as mining site.
-    - Dock with Shutdown Cluster EVE Online
-    - Ajustar para que a mensagembox aceite o botao quit
-
-   TODO: eve-online-mining
-    - Open fleet hangar with open watchlist windows when ships are orca, porpoise
-    - Pilot approach with open watch list windows
-    - detect with fleet hangar < 2500 before moving ore to fleet hangar
-    - Incluir para warp to asteroid belt tbm pelo overview
-    - Add setting to avoid rats by Cerberus (não compativel com fleet)
-    - Add a setting 'mining-site-location' to support bookmarked location as mining site.
-    - Add support with warp to watchlist with visibled.
-    - Dock with Shutdown Cluster EVE Online
-    - Stop clico do modulo do miner em 50% +-
-    - Ajustar para que a mensagembox aceite o botao quit
-
-
 -}
 
 
