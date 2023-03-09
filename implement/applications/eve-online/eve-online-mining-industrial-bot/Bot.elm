@@ -1,11 +1,11 @@
-{- EVE Online mining bot for industrial ship version 2023-03-05
+{- EVE Online mining bot for industrial ship version 2023-03-08
 
-   The bot warps to an asteroid belt or a pilot of your fleet, mines there using the mining drones until the fleet hangar is full, and then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
+   The bot warps to an asteroid belt or a pilot in your fleet, activates the booster module, mines using drones until the fleet hangar is full, then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
    ## Features
 
    + If no station name or structure name is given with the bot-settings, the bot docks again at the station where it was last docked.
-   + If you want the industrial ship to warp to a pilot of your fleet, add him to a watchlist and open the 'watchlist' window.
+   + If you want the industrial ship to warp to pilot of your fleet, add pilot to a watchlist and open the 'watchlist' window.
 
    ## Setting up the Game Client
 
@@ -40,8 +40,8 @@
 
    ```
    unload-station-name = Noghere VII - Moon 15
-   activate-module-always = shield command burst ii
-   activate-module-always = mining foreman burst ii
+   activate-module-always = shield hardener
+   activate-module-always = afterburner
    ```
 
    To learn more about the mining bot, see <https://to.botlab.org/guide/app/eve-online-mining-bot>
@@ -738,6 +738,9 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
 
                             describeThresholdToUnloadFleetHangar =
                                 (context.eventContext.botSettings.unloadFleetHangarPercent |> String.fromInt) ++ "%"
+
+                            knownBoosterModules =
+                                knownBoosterModulesFromContext context
                         in
                         if context.eventContext.botSettings.unloadMiningHoldPercent <= fillPercent then
                             describeBranch ("The fleet hangar is filled at least " ++ describeThresholdToUnload ++ ". Unload the ore.")
@@ -779,8 +782,22 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
                                                     |> Maybe.withDefault
                                                         (describeBranch
                                                             "I see a locked target."
-                                                            (readShipUIModuleButtonTooltips context
-                                                                |> Maybe.withDefault waitForProgressInGame
+                                                            (case knownBoosterModules |> List.filter (moduleIsActiveOrReloadingOrStopping >> not) |> List.head of
+                                                                Nothing ->
+                                                                    describeBranch
+                                                                        (if knownBoosterModules == [] then
+                                                                            "Found no booster modules so far."
+
+                                                                         else
+                                                                            "All known booster modules found so far are active."
+                                                                        )
+                                                                        (readShipUIModuleButtonTooltips context
+                                                                            |> Maybe.withDefault waitForProgressInGame
+                                                                        )
+
+                                                                Just inactiveBoosterModule ->
+                                                                    describeBranch "I see an inactive mining module. Activate it."
+                                                                        (clickModuleButtonButWaitIfClickedInPreviousStep context inactiveBoosterModule)
                                                             )
                                                         )
                                                 )
@@ -1234,28 +1251,31 @@ runAway =
 
 dockToUnloadOre : BotDecisionContext -> DecisionPathNode
 dockToUnloadOre context =
-    case context.eventContext.botSettings.unloadStationName of
-        Just unloadStationName ->
-            dockToStationOrStructureWithMatchingName
-                { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
-                context
-
-        Nothing ->
-            case context.eventContext.botSettings.unloadStructureName of
-                Just unloadStructureName ->
+    inactivateModuleBoosterBeforeDocking context
+        |> Maybe.withDefault
+            (case context.eventContext.botSettings.unloadStationName of
+                Just unloadStationName ->
                     dockToStationOrStructureWithMatchingName
-                        { prioritizeStructures = True, nameFromSettingOrInfoPanel = unloadStructureName }
+                        { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
                         context
 
                 Nothing ->
-                    case context.memory.lastDockedStationNameFromInfoPanel of
-                        Just unloadStationName ->
+                    case context.eventContext.botSettings.unloadStructureName of
+                        Just unloadStructureName ->
                             dockToStationOrStructureWithMatchingName
-                                { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
+                                { prioritizeStructures = True, nameFromSettingOrInfoPanel = unloadStructureName }
                                 context
 
                         Nothing ->
-                            describeBranch "At which station should I dock?. I was never docked in a station in this session." askForHelpToGetUnstuck
+                            case context.memory.lastDockedStationNameFromInfoPanel of
+                                Just unloadStationName ->
+                                    dockToStationOrStructureWithMatchingName
+                                        { prioritizeStructures = False, nameFromSettingOrInfoPanel = unloadStationName }
+                                        context
+
+                                Nothing ->
+                                    describeBranch "At which station should I dock?. I was never docked in a station in this session." askForHelpToGetUnstuck
+            )
 
 
 dockToRandomStationOrStructure : BotDecisionContext -> DecisionPathNode
@@ -1472,12 +1492,12 @@ returnDronesToBay context =
             )
 
 
-inactivateModuleBeforeDocking : BotDecisionContext -> Maybe DecisionPathNode
-inactivateModuleBeforeDocking context =
-    case context |> knownModulesToActivateAlways |> List.filter (Tuple.second >> moduleIsActiveOrReloading) |> List.head of
-        Just ( activeModuleMatchingText, activeModule ) ->
+inactivateModuleBoosterBeforeDocking : BotDecisionContext -> Maybe DecisionPathNode
+inactivateModuleBoosterBeforeDocking context =
+    case context |> knownBoosterModulesFromContext |> List.filter moduleIsActiveOrReloadingOrStopping |> List.head of
+        Just activeModule ->
             Just
-                (describeBranch ("I see active module '" ++ activeModuleMatchingText ++ "' to activate always. Inactivate it before docking.")
+                (describeBranch "I see active booster module. Inactivating it before docking."
                     (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
                 )
 
@@ -1490,14 +1510,14 @@ readShipUIModuleButtonTooltips =
     EveOnline.BotFrameworkSeparatingMemory.readShipUIModuleButtonTooltipWhereNotYetInMemory
 
 
-knownMiningModulesFromContext : BotDecisionContext -> List EveOnline.ParseUserInterface.ShipUIModuleButton
-knownMiningModulesFromContext context =
+knownBoosterModulesFromContext : BotDecisionContext -> List EveOnline.ParseUserInterface.ShipUIModuleButton
+knownBoosterModulesFromContext context =
     context.readingFromGameClient.shipUI
         |> Maybe.map .moduleButtons
         |> Maybe.withDefault []
         |> List.filter
             (EveOnline.BotFramework.getModuleButtonTooltipFromModuleButton context.memory.shipModules
-                >> Maybe.map tooltipLooksLikeMiningModule
+                >> Maybe.map tooltipLooksLikeBurstModule
                 >> Maybe.withDefault False
             )
 
@@ -1532,12 +1552,12 @@ tooltipLooksLikeCompressorModule =
             (Regex.fromString "\\s*Compressor\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
 
 
-tooltipLooksLikeIndustrialModule : ModuleButtonTooltipMemory -> Bool
-tooltipLooksLikeIndustrialModule =
+tooltipLooksLikeBurstModule : ModuleButtonTooltipMemory -> Bool
+tooltipLooksLikeBurstModule =
     .allContainedDisplayTextsWithRegion
         >> List.map Tuple.first
         >> List.any
-            (Regex.fromString "\\s*Industrial\\s*Core\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
+            (Regex.fromString "\\s*Burst\\s*I|\\s*Industrial\\s*Core\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
 
 
 tooltipLooksLikeModuleToActivateAlways : BotDecisionContext -> ModuleButtonTooltipMemory -> Maybe String
@@ -1560,10 +1580,15 @@ tooltipLooksLikeModuleToActivateAlways context =
         >> List.head
 
 
-moduleIsActiveOrReloading : EveOnline.ParseUserInterface.ShipUIModuleButton -> Bool
-moduleIsActiveOrReloading moduleButton =
-    (moduleButton.isActive |> Maybe.withDefault False)
+moduleIsActiveOrReloadingOrStopping : EveOnline.ParseUserInterface.ShipUIModuleButton -> Bool
+moduleIsActiveOrReloadingOrStopping moduleButton =
+    ((moduleButton.isActive |> Maybe.withDefault False)
         || ((moduleButton.rampRotationMilli |> Maybe.withDefault 0) /= 0)
+    )
+        && not
+            ((moduleButton.isActive |> Maybe.withDefault False)
+                && moduleButton.isBusy
+            )
 
 
 botMain : InterfaceToHost.BotConfig State
@@ -1612,7 +1637,7 @@ statusTextFromDecisionContext context =
             case readingFromGameClient.shipUI of
                 Just shipUI ->
                     [ "Shield HP at " ++ (shipUI.hitpointsPercent.shield |> String.fromInt) ++ "%."
-                    , "Found " ++ (context |> knownMiningModulesFromContext |> List.length |> String.fromInt) ++ " mining modules."
+                    , "Found " ++ (context |> knownBoosterModulesFromContext |> List.length |> String.fromInt) ++ " booster modules."
                     ]
                         |> String.join " "
 
