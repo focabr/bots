@@ -721,7 +721,12 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
             )
 
     else
-        case context |> knownModulesToActivateAlways |> List.filter (Tuple.second >> .isActive >> Maybe.withDefault False >> not) |> List.head of
+        case
+            context
+                |> knownModulesToActivateAlways
+                |> List.filter (Tuple.second >> .isActive >> Maybe.withDefault False >> not)
+                |> List.head
+        of
             Just ( inactiveModuleMatchingText, inactiveModule ) ->
                 describeBranch ("I see inactive module '" ++ inactiveModuleMatchingText ++ "' to activate always. Activate it.")
                     (clickModuleButtonButWaitIfClickedInPreviousStep context inactiveModule)
@@ -733,14 +738,17 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
 
                     Just fillPercent ->
                         let
+                            unloadFHP =
+                                context.eventContext.botSettings.unloadFleetHangarPercent
+
+                            describeThresholdToUnloadFleetHangar =
+                                (unloadFHP |> String.fromInt) ++ "%"
+
                             describeThresholdToUnload =
                                 (context.eventContext.botSettings.unloadMiningHoldPercent |> String.fromInt) ++ "%"
 
-                            describeThresholdToUnloadFleetHangar =
-                                (context.eventContext.botSettings.unloadFleetHangarPercent |> String.fromInt) ++ "%"
-
                             knownBoosterModules =
-                                knownBoosterModulesFromContext context
+                                knownBoosterModulesFromContext context tooltipLooksLikeBoosterModule
                         in
                         if context.eventContext.botSettings.unloadMiningHoldPercent <= fillPercent then
                             describeBranch ("The fleet hangar is filled at least " ++ describeThresholdToUnload ++ ". Unload the ore.")
@@ -749,17 +757,16 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
                                 )
 
                         else if
-                            0
-                                < context.eventContext.botSettings.unloadFleetHangarPercent
-                                && fillPercent
-                                >= context.eventContext.botSettings.unloadFleetHangarPercent
+                            (0 < unloadFHP)
+                                && (fillPercent >= unloadFHP)
                                 -- The mining drones deliver the ore to the mining hold, hence why 97 and not 99.
-                                && 97
-                                > (context.memory.lastVisibleCapacityGaugeUsedPercentInMiningHold
-                                    |> Maybe.withDefault 0
-                                  )
+                                && (97 > (context.memory.lastVisibleCapacityGaugeUsedPercentInMiningHold |> Maybe.withDefault 0))
                         then
-                            describeBranch ("The fleet hangar is filled at least " ++ describeThresholdToUnloadFleetHangar ++ ". Unload the ore on mining hold.")
+                            describeBranch
+                                ("The fleet hangar is filled at least "
+                                    ++ describeThresholdToUnloadFleetHangar
+                                    ++ ". Unload the ore on mining hold."
+                                )
                                 (ensureFleetHangarIsSelectedInInventoryWindow
                                     context.readingFromGameClient
                                     (inSpaceWithFleetHangarSelectedMoveToMiningHold context)
@@ -782,7 +789,9 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
                                                     |> Maybe.withDefault
                                                         (describeBranch
                                                             "I see a locked target."
-                                                            (case knownBoosterModules |> List.filter (moduleIsActiveOrReloadingOrStopping >> not) |> List.head of
+                                                            (case
+                                                                knownBoosterModules |> List.filter (moduleIsActiveOrReloadingOrStopping >> not) |> List.head
+                                                             of
                                                                 Nothing ->
                                                                     describeBranch
                                                                         (if knownBoosterModules == [] then
@@ -1062,16 +1071,20 @@ lockTargetFromOverviewEntryAndEnsureIsInRange context rangeInMeters overviewEntr
                         (lockTargetFromOverviewEntry overviewEntry context)
 
             else
-                describeBranch ("Object is not in range (" ++ (distanceInMeters |> String.fromInt) ++ " meters away). Approach.")
-                    (if shipManeuverIsApproaching context.readingFromGameClient then
-                        describeBranch "I see we already approach." waitForProgressInGame
+                inactivateModuleIndustrialCore context
+                    |> Maybe.withDefault
+                        (describeBranch
+                            ("Object is not in range (" ++ (distanceInMeters |> String.fromInt) ++ " meters away). Approach.")
+                            (if shipManeuverIsApproaching context.readingFromGameClient then
+                                describeBranch "I see we already approach." waitForProgressInGame
 
-                     else
-                        useContextMenuCascadeOnOverviewEntry
-                            (useMenuEntryWithTextContaining "approach" menuCascadeCompleted)
-                            overviewEntry
-                            context
-                    )
+                             else
+                                useContextMenuCascadeOnOverviewEntry
+                                    (useMenuEntryWithTextContaining "approach" menuCascadeCompleted)
+                                    overviewEntry
+                                    context
+                            )
+                        )
 
         Err error ->
             describeBranch ("Failed to read the distance: " ++ error) askForHelpToGetUnstuck
@@ -1494,10 +1507,31 @@ returnDronesToBay context =
 
 inactivateModuleBoosterBeforeDocking : BotDecisionContext -> Maybe DecisionPathNode
 inactivateModuleBoosterBeforeDocking context =
-    case context |> knownBoosterModulesFromContext |> List.filter moduleIsActiveOrReloadingOrStopping |> List.head of
+    case
+        knownBoosterModulesFromContext context tooltipLooksLikeBoosterModule
+            |> List.filter moduleIsActiveOrReloadingOrStopping
+            |> List.head
+    of
         Just activeModule ->
             Just
                 (describeBranch "I see active booster module. Inactivating it before docking."
+                    (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
+                )
+
+        Nothing ->
+            Nothing
+
+
+inactivateModuleIndustrialCore : BotDecisionContext -> Maybe DecisionPathNode
+inactivateModuleIndustrialCore context =
+    case
+        knownBoosterModulesFromContext context tooltipLooksLikeIndustrialModule
+            |> List.filter moduleIsActiveOrReloadingOrStopping
+            |> List.head
+    of
+        Just activeModule ->
+            Just
+                (describeBranch "I see active Industrial Core module. Inactivating it."
                     (clickModuleButtonButWaitIfClickedInPreviousStep context activeModule)
                 )
 
@@ -1510,14 +1544,14 @@ readShipUIModuleButtonTooltips =
     EveOnline.BotFrameworkSeparatingMemory.readShipUIModuleButtonTooltipWhereNotYetInMemory
 
 
-knownBoosterModulesFromContext : BotDecisionContext -> List EveOnline.ParseUserInterface.ShipUIModuleButton
-knownBoosterModulesFromContext context =
+knownBoosterModulesFromContext : BotDecisionContext -> (ModuleButtonTooltipMemory -> Bool) -> List EveOnline.ParseUserInterface.ShipUIModuleButton
+knownBoosterModulesFromContext context tooltipLooksLike =
     context.readingFromGameClient.shipUI
         |> Maybe.map .moduleButtons
         |> Maybe.withDefault []
         |> List.filter
             (EveOnline.BotFramework.getModuleButtonTooltipFromModuleButton context.memory.shipModules
-                >> Maybe.map tooltipLooksLikeBurstModule
+                >> Maybe.map tooltipLooksLike
                 >> Maybe.withDefault False
             )
 
@@ -1536,14 +1570,6 @@ knownModulesToActivateAlways context =
             )
 
 
-tooltipLooksLikeMiningModule : ModuleButtonTooltipMemory -> Bool
-tooltipLooksLikeMiningModule =
-    .allContainedDisplayTextsWithRegion
-        >> List.map Tuple.first
-        >> List.any
-            (Regex.fromString "\\d\\s*m3\\s*\\/\\s*s" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
-
-
 tooltipLooksLikeCompressorModule : ModuleButtonTooltipMemory -> Bool
 tooltipLooksLikeCompressorModule =
     .allContainedDisplayTextsWithRegion
@@ -1552,12 +1578,20 @@ tooltipLooksLikeCompressorModule =
             (Regex.fromString "\\s*Compressor\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
 
 
-tooltipLooksLikeBurstModule : ModuleButtonTooltipMemory -> Bool
-tooltipLooksLikeBurstModule =
+tooltipLooksLikeBoosterModule : ModuleButtonTooltipMemory -> Bool
+tooltipLooksLikeBoosterModule =
     .allContainedDisplayTextsWithRegion
         >> List.map Tuple.first
         >> List.any
-            (Regex.fromString "\\s*Burst\\s*I|\\s*Industrial\\s*Core\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
+            (Regex.fromString "\\s*Industrial\\s*Core\\s*I|\\s*Burst\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
+
+
+tooltipLooksLikeIndustrialModule : ModuleButtonTooltipMemory -> Bool
+tooltipLooksLikeIndustrialModule =
+    .allContainedDisplayTextsWithRegion
+        >> List.map Tuple.first
+        >> List.any
+            (Regex.fromString "\\s*Industrial\\s*Core\\s*I" |> Maybe.map Regex.contains |> Maybe.withDefault (always False))
 
 
 tooltipLooksLikeModuleToActivateAlways : BotDecisionContext -> ModuleButtonTooltipMemory -> Maybe String
@@ -1589,6 +1623,20 @@ moduleIsActiveOrReloadingOrStopping moduleButton =
             ((moduleButton.isActive |> Maybe.withDefault False)
                 && moduleButton.isBusy
             )
+
+
+quickMessageHasIndustrialAndWater : BotDecisionContext -> Bool
+quickMessageHasIndustrialAndWater context =
+    (context.readingFromGameClient
+        |> EveOnline.BotFramework.quickMessageFromReadingFromGameClient
+        |> Maybe.map (stringContainsIgnoringCase "Industrial Core")
+        |> Maybe.withDefault False
+    )
+        && (context.readingFromGameClient
+                |> EveOnline.BotFramework.quickMessageFromReadingFromGameClient
+                |> Maybe.map (stringContainsIgnoringCase "Heavy Water")
+                |> Maybe.withDefault False
+           )
 
 
 botMain : InterfaceToHost.BotConfig State
@@ -1637,7 +1685,13 @@ statusTextFromDecisionContext context =
             case readingFromGameClient.shipUI of
                 Just shipUI ->
                     [ "Shield HP at " ++ (shipUI.hitpointsPercent.shield |> String.fromInt) ++ "%."
-                    , "Found " ++ (context |> knownBoosterModulesFromContext |> List.length |> String.fromInt) ++ " booster modules."
+                    , "Found "
+                        ++ (knownBoosterModulesFromContext context
+                                tooltipLooksLikeBoosterModule
+                                |> List.length
+                                |> String.fromInt
+                           )
+                        ++ " booster modules."
                     ]
                         |> String.join " "
 
