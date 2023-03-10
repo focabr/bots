@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-03-08
+{- EVE Online mining bot for industrial ship version 2023-03-09
 
    The bot warps to an asteroid belt or a pilot in your fleet, activates the booster module, mines using drones until the fleet hangar is full, then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -44,7 +44,7 @@
    activate-module-always = afterburner
    ```
 
-   To learn more about the mining bot, see <https://to.botlab.org/guide/app/eve-online-mining-bot>
+   To learn more about the mining bot, see see [Guide](https://github.com/focabr/bots/blob/eve-online-mining-industrial-bot/guide/eve-online/eve-online-mining-industrial-bot.md)
 
 -}
 {-
