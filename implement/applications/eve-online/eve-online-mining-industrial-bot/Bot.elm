@@ -420,6 +420,9 @@ returnDronesAndRunAwayIfHitpointsAreTooLowOrWithoutDrones context shipUI =
         returnDronesShieldHitpointsThresholdPercent =
             context.eventContext.botSettings.runAwayShieldHitpointsThresholdPercent + 5
 
+        inactivateBoosterModuleShieldHitpointsThresholdPercent =
+            context.eventContext.botSettings.runAwayShieldHitpointsThresholdPercent + 10
+
         runAwayWithDescription =
             describeBranch
                 ("Shield hitpoints are at " ++ (shipUI.hitpointsPercent.shield |> String.fromInt) ++ "%. Run away.")
@@ -432,7 +435,22 @@ returnDronesAndRunAwayIfHitpointsAreTooLowOrWithoutDrones context shipUI =
         returnDronesToBay context
             |> Maybe.map
                 (describeBranch
-                    ("Shield hitpoints are below " ++ (returnDronesShieldHitpointsThresholdPercent |> String.fromInt) ++ "%. Return drones.")
+                    ("Shield hitpoints are below "
+                        ++ (returnDronesShieldHitpointsThresholdPercent |> String.fromInt)
+                        ++ "%. Return drones."
+                    )
+                )
+            |> Maybe.withDefault runAwayWithDescription
+            |> Just
+
+    else if shipUI.hitpointsPercent.shield < inactivateBoosterModuleShieldHitpointsThresholdPercent then
+        inactivateModuleBoosterBeforeWarp context
+            |> Maybe.map
+                (describeBranch
+                    ("Shield hitpoints are below "
+                        ++ (inactivateBoosterModuleShieldHitpointsThresholdPercent |> String.fromInt)
+                        ++ "%. Inactivate Booster module."
+                    )
                 )
             |> Maybe.withDefault runAwayWithDescription
             |> Just
@@ -841,8 +859,11 @@ travelToMiningSiteAndLaunchDronesAndTargetAsteroid : BotDecisionContext -> Decis
 travelToMiningSiteAndLaunchDronesAndTargetAsteroid context =
     let
         continueWithWarpToMiningSite =
-            returnDronesToBay context
-                |> Maybe.withDefault (warpToMiningSiteOrWatchlistEntry context)
+            inactivateModuleBoosterBeforeWarp context
+                |> Maybe.withDefault
+                    (returnDronesToBay context
+                        |> Maybe.withDefault (warpToMiningSiteOrWatchlistEntry context)
+                    )
     in
     case context.readingFromGameClient |> clickableAsteroidsFromOverviewWindow of
         [] ->
@@ -891,14 +912,17 @@ warpToOverviewEntryIfFarEnough context destinationOverviewEntry =
             else
                 Just
                     (describeBranch "Far enough to use Warp"
-                        (returnDronesToBay context
+                        (inactivateModuleBoosterBeforeWarp context
                             |> Maybe.withDefault
-                                (useContextMenuCascadeOnOverviewEntry
-                                    (useMenuEntryWithTextContaining "Warp to Within"
-                                        (useMenuEntryWithTextContaining "Within 0 m" menuCascadeCompleted)
-                                    )
-                                    destinationOverviewEntry
-                                    context
+                                (returnDronesToBay context
+                                    |> Maybe.withDefault
+                                        (useContextMenuCascadeOnOverviewEntry
+                                            (useMenuEntryWithTextContaining "Warp to Within"
+                                                (useMenuEntryWithTextContaining "Within 0 m" menuCascadeCompleted)
+                                            )
+                                            destinationOverviewEntry
+                                            context
+                                        )
                                 )
                         )
                     )
@@ -1092,18 +1116,24 @@ lockTargetFromOverviewEntryAndEnsureIsInRange context rangeInMeters overviewEntr
 
 lockTargetFromOverviewEntry : OverviewWindowEntry -> BotDecisionContext -> DecisionPathNode
 lockTargetFromOverviewEntry overviewEntry context =
-    describeBranch
-        ("Lock target from overview entry '"
-            ++ (overviewEntry.objectName |> Maybe.withDefault "")
-            ++ "' ("
-            ++ (overviewEntry.objectDistance |> Maybe.withDefault "")
-            ++ ")"
-        )
-        (useContextMenuCascadeOnOverviewEntry
-            (useMenuEntryWithTextEqual "Lock target" menuCascadeCompleted)
-            overviewEntry
-            context
-        )
+    {- An industrial command ship is not the fastest ship in the fleet and
+       the 'Industrial Core' modules make the ship stop when activated.
+    -}
+    stopShipFromGameClient context
+        |> Maybe.withDefault
+            (describeBranch
+                ("Lock target from overview entry '"
+                    ++ (overviewEntry.objectName |> Maybe.withDefault "")
+                    ++ "' ("
+                    ++ (overviewEntry.objectDistance |> Maybe.withDefault "")
+                    ++ ")"
+                )
+                (useContextMenuCascadeOnOverviewEntry
+                    (useMenuEntryWithTextEqual "Lock target" menuCascadeCompleted)
+                    overviewEntry
+                    context
+                )
+            )
 
 
 dockToStationOrStructureWithMatchingName :
@@ -1264,7 +1294,7 @@ runAway =
 
 dockToUnloadOre : BotDecisionContext -> DecisionPathNode
 dockToUnloadOre context =
-    inactivateModuleBoosterBeforeDocking context
+    inactivateModuleBoosterBeforeWarp context
         |> Maybe.withDefault
             (case context.eventContext.botSettings.unloadStationName of
                 Just unloadStationName ->
@@ -1505,8 +1535,8 @@ returnDronesToBay context =
             )
 
 
-inactivateModuleBoosterBeforeDocking : BotDecisionContext -> Maybe DecisionPathNode
-inactivateModuleBoosterBeforeDocking context =
+inactivateModuleBoosterBeforeWarp : BotDecisionContext -> Maybe DecisionPathNode
+inactivateModuleBoosterBeforeWarp context =
     case
         knownBoosterModulesFromContext context tooltipLooksLikeBoosterModule
             |> List.filter moduleIsActiveOrReloadingOrStopping
@@ -1542,6 +1572,25 @@ inactivateModuleIndustrialCore context =
 readShipUIModuleButtonTooltips : BotDecisionContext -> Maybe DecisionPathNode
 readShipUIModuleButtonTooltips =
     EveOnline.BotFrameworkSeparatingMemory.readShipUIModuleButtonTooltipWhereNotYetInMemory
+
+
+stopShipFromGameClient : BotDecisionContext -> Maybe DecisionPathNode
+stopShipFromGameClient context =
+    if not (shipManeuverIsApproaching context.readingFromGameClient) then
+        Nothing
+
+    else
+        case context.readingFromGameClient.shipUI |> Maybe.andThen .stopButton of
+            Nothing ->
+                Nothing
+
+            Just stopButton ->
+                Just
+                    (describeBranch "I see we already approach, stopping ship before locking the target."
+                        (decideActionForCurrentStep
+                            (mouseClickOnUIElement MouseButtonLeft stopButton)
+                        )
+                    )
 
 
 knownBoosterModulesFromContext : BotDecisionContext -> (ModuleButtonTooltipMemory -> Bool) -> List EveOnline.ParseUserInterface.ShipUIModuleButton
