@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-03-09
+{- EVE Online mining bot for industrial ship version 2023-03-10
 
    The bot warps to an asteroid belt or a pilot in your fleet, activates the booster module, mines using drones until the fleet hangar is full, then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -929,63 +929,6 @@ warpToOverviewEntryIfFarEnough context destinationOverviewEntry =
 
         Err error ->
             Just (describeBranch ("Failed to read the distance: " ++ error) askForHelpToGetUnstuck)
-
-
-
--- ensureTheInventoryIsSelectedInInventoryWindow :
---     ReadingFromGameClient
---     -> { chooseInventoryWindow : String }
---     -> (EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode)
---     -> DecisionPathNode
--- ensureTheInventoryIsSelectedInInventoryWindow readingFromGameClient { chooseInventoryWindow } continueWithInventoryWindow =
---     let
---         maybeFleetOrMiningInventoryInInventoryWindow =
---             if chooseInventoryWindow == "FleetHangar" then
---                 inventoryWindowWithFleetHangarSelectedFromGameClient
---             else
---                 inventoryWindowWithMiningHoldSelectedFromGameClient
---     in
---     case readingFromGameClient |> maybeFleetOrMiningInventoryInInventoryWindow of
---         Just inventoryWindow ->
---             continueWithInventoryWindow inventoryWindow
---         Nothing ->
---             case readingFromGameClient.inventoryWindows |> List.head of
---                 Nothing ->
---                     describeBranch "I do not see an inventory window. Please open an inventory window." askForHelpToGetUnstuck
---                 Just inventoryWindow ->
---                     describeBranch
---                         "???? is not selected. Select the ?????."
---                         (case inventoryWindow |> activeShipTreeEntryFromInventoryWindow of
---                             Nothing ->
---                                 describeBranch "I do not see the active ship in the inventory." askForHelpToGetUnstuck
---                             Just activeShipTreeEntry ->
---                                 let
---                                     maybeMiningHoldTreeEntry =
---                                         activeShipTreeEntry
---                                             |> miningHoldFromInventoryWindowShipEntry
---                                     maybeFleetHangarTreeEntry =
---                                         activeShipTreeEntry
---                                             |> fleetHangarFromInventoryWindowShipEntry
---                                 in
---                                 case maybeMiningHoldTreeEntry of
---                                     Nothing ->
---                                         describeBranch "I do not see the mining hold under the active ship in the inventory."
---                                             (case activeShipTreeEntry.toggleBtn of
---                                                 Nothing ->
---                                                     describeBranch "I do not see the toggle button to expand the active ship tree entry."
---                                                         askForHelpToGetUnstuck
---                                                 Just toggleBtn ->
---                                                     describeBranch "Click the toggle button to expand."
---                                                         (decideActionForCurrentStep
---                                                             (mouseClickOnUIElement MouseButtonLeft toggleBtn)
---                                                         )
---                                             )
---                                     Just miningHoldTreeEntry ->
---                                         describeBranch "Click the tree entry representing the mining hold."
---                                             (decideActionForCurrentStep
---                                                 (mouseClickOnUIElement MouseButtonLeft miningHoldTreeEntry.uiNode)
---                                             )
---                         )
 
 
 ensureMiningHoldIsSelectedInInventoryWindow : ReadingFromGameClient -> (EveOnline.ParseUserInterface.InventoryWindow -> DecisionPathNode) -> DecisionPathNode
