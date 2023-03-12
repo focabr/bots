@@ -1,4 +1,4 @@
-{- EVE Online mining bot for industrial ship version 2023-03-10
+{- EVE Online mining bot for industrial ship version 2023-03-11
 
    The bot warps to an asteroid belt or a pilot in your fleet, activates the booster module, mines using drones until the fleet hangar is full, then docks at a station or structure to unload the ore. It then repeats this cycle until you stop it.
 
@@ -607,7 +607,10 @@ inSpaceWithFleetHangarSelectedMoveToMiningHold _ inventoryWindowWithFleetHangarS
                         |> Maybe.withDefault
                             (case inventoryWindowWithFleetHangarSelected |> selectedContainerFirstItemFromInventoryWindow of
                                 Nothing ->
-                                    describeBranch "I see no item in the fleet hangar." askForHelpToGetUnstuck
+                                    describeBranch "I see no item in the fleet hangar, click the tree entry representing the mining hold."
+                                        (decideActionForCurrentStep
+                                            (mouseClickOnUIElement MouseButtonLeft miningHoldFromInventory.uiNode)
+                                        )
 
                                 Just itemInInventory ->
                                     describeBranch "I see at least one item in the fleet hangar."
@@ -769,7 +772,7 @@ inSpaceWithFleetHangarSelected context seeUndockingComplete inventoryWindowWithF
                                 knownBoosterModulesFromContext context tooltipLooksLikeBoosterModule
                         in
                         if context.eventContext.botSettings.unloadMiningHoldPercent <= fillPercent then
-                            describeBranch ("The fleet hangar is filled at least " ++ describeThresholdToUnload ++ ". Unload the ore.")
+                            describeBranch ("The mining hold is filled at least " ++ describeThresholdToUnload ++ ". Unload the ore.")
                                 (returnDronesToBay context
                                     |> Maybe.withDefault (dockToUnloadOre context)
                                 )
@@ -1031,7 +1034,13 @@ lockTargetFromOverviewEntryAndEnsureIsInRange context rangeInMeters overviewEntr
         Ok distanceInMeters ->
             if distanceInMeters <= rangeInMeters then
                 if overviewEntry.commonIndications.targetedByMe || overviewEntry.commonIndications.targeting then
-                    describeBranch "Locking target is in progress, wait for completion." waitForProgressInGame
+                    describeBranch "Locking target is in progress, wait for completion."
+                        (describeBranch "In the meantime, move the ore and check the mining hold capacity."
+                            (ensureFleetHangarIsSelectedInInventoryWindow
+                                context.readingFromGameClient
+                                (inSpaceWithFleetHangarSelectedMoveToMiningHold context)
+                            )
+                        )
 
                 else
                     describeBranch "Object is in range. Lock target."
